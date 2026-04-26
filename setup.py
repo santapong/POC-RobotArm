@@ -12,11 +12,13 @@ setup(
         "scipy>=1.10.0",
         "spatialmath-python>=1.1.0",
         "matplotlib>=3.7.0",
+        "pybullet>=3.2.5",
         "ollama>=0.4.0",
     ],
     entry_points={
         "console_scripts": [
             "robotarm=src.main:main",
+            "robotarm-sim=src.simulation.gui:main",
         ],
     },
 )

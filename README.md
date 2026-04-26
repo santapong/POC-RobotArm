@@ -9,6 +9,7 @@ Robotics Kinematics Solver with LLM Interface - A proof-of-concept for solving F
 - **Predefined Robots**: Franka Emika Panda (7-DOF), Universal Robots UR5 (6-DOF)
 - **Custom Robots**: Define your own robot arm using DH parameters
 - **3D Visualization**: Matplotlib-based arm plotting and trajectory visualization
+- **3D Simulation (PyBullet)**: Standalone desktop OpenGL viewer (RViz-like) with live joint sliders, target markers, and physics
 - **LLM Chat Interface**: Ask questions in natural language via Ollama (local LLM)
 - **Direct Command Mode**: Works without LLM as a CLI tool
 
@@ -72,7 +73,23 @@ print(ik_result["joint_angles"])
 python examples/demo_fk.py    # Forward kinematics demo
 python examples/demo_ik.py    # Inverse kinematics demo
 python examples/demo_llm_chat.py  # LLM chat demo
+python examples/demo_simulation.py     # Interactive 3D simulator (PyBullet)
+python examples/demo_simulation_ik.py  # Animated IK trajectory in 3D
 ```
+
+### 3D Simulation (Desktop, no browser)
+```bash
+python -m src.simulation                            # default Kuka IIWA
+python -m src.simulation --urdf franka_panda/panda.urdf  # 7-DOF Panda
+```
+
+This opens a native PyBullet OpenGL window:
+- Drag with the mouse to rotate / pan / zoom the camera
+- Use the `joint_*` sliders to drive each joint in real time
+- Set `target_x/y/z` then nudge `solve_ik` to snap the arm onto a 3D target (red sphere)
+- Nudge `reset` to return to zero pose
+
+The simulator runs as a standalone Python program — no website, no HTTP server.
 
 ## Testing
 
@@ -86,13 +103,22 @@ pytest tests/ -v
 src/
 ├── robots/          # Robot model definitions (Panda, UR5, custom)
 ├── kinematics/      # FK and IK solvers
-├── visualization/   # 3D plotting
+├── visualization/   # Matplotlib 3D plotting
+├── simulation/      # PyBullet 3D simulator (engine + GUI)
 ├── llm/             # Ollama LLM agent with tool calling
 └── main.py          # CLI entry point
 ```
 
 ## Tech Stack
 
-- [roboticstoolbox-python](https://github.com/petercorke/robotics-toolbox-python) - FK/IK engine
-- [Ollama](https://ollama.ai) - Local LLM for natural language interface
-- numpy, scipy, matplotlib
+**Backend (Python)**
+- [roboticstoolbox-python](https://github.com/petercorke/robotics-toolbox-python) — symbolic FK/IK over DH-parameter robot models
+- [PyBullet](https://pybullet.org) — physics + 3D rendering for the simulator (loads URDF, computes IK, renders OpenGL)
+- numpy, scipy
+
+**Frontend (desktop, NOT web)**
+- PyBullet's native OpenGL window (mouse-controlled camera, debug sliders) — runs as a standalone program like RViz / RobotMaster, no browser required
+- Matplotlib — static plots for kinematics demos
+
+**Optional**
+- [Ollama](https://ollama.ai) — local LLM for the natural-language chat interface
