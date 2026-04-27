@@ -122,22 +122,29 @@ class RobotArmSim:
         self,
         target_position: Sequence[float],
         target_orientation: Optional[Sequence[float]] = None,
+        max_iterations: int = 200,
+        residual_threshold: float = 1e-5,
     ) -> list[float]:
         """Inverse kinematics via PyBullet's damped least-squares solver."""
+        kwargs = dict(
+            maxNumIterations=max_iterations,
+            residualThreshold=residual_threshold,
+            physicsClientId=self.client,
+        )
         if target_orientation is not None:
             sol = p.calculateInverseKinematics(
                 self.robot_id,
                 self.end_effector_index,
                 list(target_position),
                 list(target_orientation),
-                physicsClientId=self.client,
+                **kwargs,
             )
         else:
             sol = p.calculateInverseKinematics(
                 self.robot_id,
                 self.end_effector_index,
                 list(target_position),
-                physicsClientId=self.client,
+                **kwargs,
             )
         return list(sol)[: self.num_joints]
 

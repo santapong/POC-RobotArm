@@ -56,16 +56,22 @@ class RobotArmAgent:
         if cmd == "help":
             return (
                 "Available commands:\n"
-                "  list                          - List available robots\n"
-                "  info <robot>                  - Get robot details\n"
-                "  fk <robot> <angles...>        - Forward kinematics\n"
-                "  ik <robot> <x> <y> <z>        - Inverse kinematics\n"
-                "  plot <robot> <angles...>       - Visualize robot\n"
-                "  help                          - Show this help\n"
+                "  list                              - List available robots\n"
+                "  info <robot>                      - Get robot details\n"
+                "  fk <robot> <angles...>            - Forward kinematics\n"
+                "  ik <robot> <x> <y> <z>            - Inverse kinematics\n"
+                "  plot <robot> <angles...>          - Visualize robot (matplotlib)\n"
+                "  sim state                         - Live simulator state\n"
+                "  sim move <x> <y> <z>              - IK move in simulator\n"
+                "  sim joint <idx> <deg>             - Drive a single joint (degrees)\n"
+                "  sim reset                         - Reset simulator to home pose\n"
+                "  help                              - Show this help\n"
                 "\nExamples:\n"
                 "  fk panda 0 0 0 0 0 0 0\n"
                 "  ik panda 0.5 0.0 0.5\n"
                 "  plot ur5 0 -1.57 1.57 0 0 0\n"
+                "  sim move 0.4 0.0 0.6\n"
+                "  sim joint 1 -45\n"
             )
 
         elif cmd == "list":
@@ -96,6 +102,25 @@ class RobotArmAgent:
                 args["orientation"] = orientation
             result = execute_tool("inverse_kinematics", args)
             return f"Inverse Kinematics Result:\n{result}"
+
+        elif cmd == "sim" and len(parts) >= 2:
+            sub = parts[1].lower()
+            if sub == "state":
+                return execute_tool("sim_get_state", {})
+            if sub == "reset":
+                return execute_tool("sim_reset", {})
+            if sub == "move" and len(parts) >= 5:
+                return execute_tool("sim_move_to_xyz", {
+                    "x": float(parts[2]),
+                    "y": float(parts[3]),
+                    "z": float(parts[4]),
+                })
+            if sub == "joint" and len(parts) >= 4:
+                return execute_tool("sim_set_joint", {
+                    "idx": int(parts[2]),
+                    "angle_deg": float(parts[3]),
+                })
+            return f"Unknown sim subcommand. Try: sim state | sim move x y z | sim joint idx deg | sim reset"
 
         elif cmd == "plot" and len(parts) >= 3:
             robot_name = parts[1]

@@ -10,6 +10,7 @@ Robotics Kinematics Solver with LLM Interface - A proof-of-concept for solving F
 - **Custom Robots**: Define your own robot arm using DH parameters
 - **3D Visualization**: Matplotlib-based arm plotting and trajectory visualization
 - **3D Simulation (PyBullet)**: Standalone desktop OpenGL viewer (RViz-like) with live joint sliders, target markers, and physics
+- **LLM-Driven Simulator**: The Ollama agent can drive the live 3D arm via `sim_*` tools — say *"move the arm to (0.4, 0, 0.6)"* and watch it happen
 - **LLM Chat Interface**: Ask questions in natural language via Ollama (local LLM)
 - **Direct Command Mode**: Works without LLM as a CLI tool
 
@@ -75,6 +76,7 @@ python examples/demo_ik.py    # Inverse kinematics demo
 python examples/demo_llm_chat.py  # LLM chat demo
 python examples/demo_simulation.py     # Interactive 3D simulator (PyBullet)
 python examples/demo_simulation_ik.py  # Animated IK trajectory in 3D
+python examples/demo_llm_sim.py        # Drive the 3D simulator via sim_* tools
 ```
 
 ### 3D Simulation (Desktop, no browser)
@@ -91,6 +93,36 @@ This opens a native PyBullet OpenGL window:
 
 The simulator runs as a standalone Python program — no website, no HTTP server.
 
+### LLM + Simulator (talk to the arm)
+```bash
+python -m src.main --sim                # LLM REPL + 3D simulator together
+python -m src.main --sim --no-llm       # same, but use direct `sim ...` commands
+python -m src.main --sim --urdf franka_panda/panda.urdf
+```
+
+Once both are running you can say things like:
+- *"What's the current end-effector position?"*
+- *"Move the arm to x=0.4, y=0.2, z=0.5."*
+- *"Rotate joint 1 by -45 degrees."*
+- *"Reset the arm."*
+
+Direct (no-LLM) sim commands:
+```
+sim state                  - Print live state JSON
+sim move <x> <y> <z>       - IK move and place a target marker
+sim joint <idx> <deg>      - Drive a single joint
+sim reset                  - Return to home pose
+```
+
+End-to-end scripted demo (no LLM required):
+```bash
+python examples/demo_llm_sim.py
+```
+
+#### How it works
+
+PyBullet is thread-bound to the thread that called `p.connect`, so the GUI loop owns it. The LLM REPL runs on a worker thread; its `sim_*` tool calls go through `SimBridge` — a thread-safe command queue. Each GUI tick drains the queue, executes commands on the GUI thread, and posts results back via `concurrent.futures.Future`. A read-only state snapshot is updated every tick so `sim_get_state` never blocks. Errors come back as JSON with codes like `IK_UNREACHABLE`, `JOINT_LIMIT_CLAMPED`, `SIM_DISCONNECTED`, `SIM_TIMEOUT`, `INVALID_ARG`.
+
 ## Testing
 
 ```bash
@@ -104,7 +136,7 @@ src/
 ├── robots/          # Robot model definitions (Panda, UR5, custom)
 ├── kinematics/      # FK and IK solvers
 ├── visualization/   # Matplotlib 3D plotting
-├── simulation/      # PyBullet 3D simulator (engine + GUI)
+├── simulation/      # PyBullet 3D simulator (engine + GUI + LLM bridge)
 ├── llm/             # Ollama LLM agent with tool calling
 └── main.py          # CLI entry point
 ```
