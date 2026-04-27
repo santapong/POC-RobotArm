@@ -1,0 +1,218 @@
+<?xml version="1.0"?>
+<!--
+  UR5 robot arm — primitive-shape URDF.
+
+  Link transforms and joint axes match the canonical Universal Robots UR5
+  specification (a/d/alpha values from the public UR datasheet). Visuals
+  use simple cylinders/boxes — not the official meshes — so the file is
+  self-contained, license-clean, and small (no external assets needed).
+
+  Kinematics (DH parameters) used:
+    a     = [0,       -0.425,   -0.39225, 0,       0,       0      ]
+    d     = [0.089159, 0,        0,       0.10915, 0.09465, 0.0823 ]
+    alpha = [pi/2,     0,        0,       pi/2,    -pi/2,   0      ]
+
+  All masses and inertias are approximations; sufficient for IK/visualization,
+  not for high-fidelity dynamics.
+-->
+<robot name="ur5">
+
+  <!-- =========================== base ========================= -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.0185" rpy="0 0 0"/>
+      <geometry><cylinder length="0.038" radius="0.075"/></geometry>
+      <material name="ur_dark"><color rgba="0.2 0.2 0.2 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.0185" rpy="0 0 0"/>
+      <geometry><cylinder length="0.038" radius="0.075"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="4.0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+    </inertial>
+  </link>
+
+  <!-- =========================== joint 1 — shoulder pan ========================= -->
+  <joint name="shoulder_pan_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="shoulder_link"/>
+    <origin xyz="0 0 0.089159" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14159" upper="3.14159" effort="150" velocity="3.15"/>
+  </joint>
+
+  <link name="shoulder_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder length="0.13" radius="0.06"/></geometry>
+      <material name="ur_blue"><color rgba="0.05 0.55 0.85 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder length="0.13" radius="0.06"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="3.7"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0102" ixy="0" ixz="0" iyy="0.0102" iyz="0" izz="0.00666"/>
+    </inertial>
+  </link>
+
+  <!-- =========================== joint 2 — shoulder lift ========================= -->
+  <joint name="shoulder_lift_joint" type="revolute">
+    <parent link="shoulder_link"/>
+    <child link="upper_arm_link"/>
+    <origin xyz="0 0.13585 0" rpy="0 1.570796 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-3.14159" upper="3.14159" effort="150" velocity="3.15"/>
+  </joint>
+
+  <link name="upper_arm_link">
+    <visual>
+      <origin xyz="0 0 0.2125" rpy="0 0 0"/>
+      <geometry><cylinder length="0.425" radius="0.054"/></geometry>
+      <material name="ur_blue"><color rgba="0.05 0.55 0.85 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.2125" rpy="0 0 0"/>
+      <geometry><cylinder length="0.425" radius="0.054"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="8.393"/>
+      <origin xyz="0 0 0.2125" rpy="0 0 0"/>
+      <inertia ixx="0.135" ixy="0" ixz="0" iyy="0.135" iyz="0" izz="0.0151"/>
+    </inertial>
+  </link>
+
+  <!-- =========================== joint 3 — elbow ========================= -->
+  <joint name="elbow_joint" type="revolute">
+    <parent link="upper_arm_link"/>
+    <child link="forearm_link"/>
+    <origin xyz="0 -0.1197 0.425" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-3.14159" upper="3.14159" effort="150" velocity="3.15"/>
+  </joint>
+
+  <link name="forearm_link">
+    <visual>
+      <origin xyz="0 0 0.196" rpy="0 0 0"/>
+      <geometry><cylinder length="0.39225" radius="0.045"/></geometry>
+      <material name="ur_blue"><color rgba="0.05 0.55 0.85 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.196" rpy="0 0 0"/>
+      <geometry><cylinder length="0.39225" radius="0.045"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="2.275"/>
+      <origin xyz="0 0 0.196" rpy="0 0 0"/>
+      <inertia ixx="0.0312" ixy="0" ixz="0" iyy="0.0312" iyz="0" izz="0.00407"/>
+    </inertial>
+  </link>
+
+  <!-- =========================== joint 4 — wrist 1 ========================= -->
+  <joint name="wrist_1_joint" type="revolute">
+    <parent link="forearm_link"/>
+    <child link="wrist_1_link"/>
+    <origin xyz="0 0 0.39225" rpy="0 1.570796 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-3.14159" upper="3.14159" effort="28" velocity="3.2"/>
+  </joint>
+
+  <link name="wrist_1_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder length="0.093" radius="0.04"/></geometry>
+      <material name="ur_blue"><color rgba="0.05 0.55 0.85 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder length="0.093" radius="0.04"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="1.219"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0025" ixy="0" ixz="0" iyy="0.0025" iyz="0" izz="0.0021"/>
+    </inertial>
+  </link>
+
+  <!-- =========================== joint 5 — wrist 2 ========================= -->
+  <joint name="wrist_2_joint" type="revolute">
+    <parent link="wrist_1_link"/>
+    <child link="wrist_2_link"/>
+    <origin xyz="0 0.093 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14159" upper="3.14159" effort="28" velocity="3.2"/>
+  </joint>
+
+  <link name="wrist_2_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder length="0.0945" radius="0.04"/></geometry>
+      <material name="ur_blue"><color rgba="0.05 0.55 0.85 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder length="0.0945" radius="0.04"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="1.219"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="0.0025" ixy="0" ixz="0" iyy="0.0025" iyz="0" izz="0.0021"/>
+    </inertial>
+  </link>
+
+  <!-- =========================== joint 6 — wrist 3 ========================= -->
+  <joint name="wrist_3_joint" type="revolute">
+    <parent link="wrist_2_link"/>
+    <child link="wrist_3_link"/>
+    <origin xyz="0 0 0.09465" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-3.14159" upper="3.14159" effort="28" velocity="3.2"/>
+  </joint>
+
+  <link name="wrist_3_link">
+    <visual>
+      <origin xyz="0 0.0411 0" rpy="1.570796 0 0"/>
+      <geometry><cylinder length="0.0823" radius="0.035"/></geometry>
+      <material name="ur_dark"><color rgba="0.2 0.2 0.2 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0.0411 0" rpy="1.570796 0 0"/>
+      <geometry><cylinder length="0.0823" radius="0.035"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1879"/>
+      <origin xyz="0 0.0411 0" rpy="0 0 0"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- =========================== tool / end-effector frame ========================= -->
+  <joint name="ee_fixed_joint" type="fixed">
+    <parent link="wrist_3_link"/>
+    <child link="ee_link"/>
+    <origin xyz="0 0.0823 0" rpy="0 0 1.570796"/>
+  </joint>
+
+  <link name="ee_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.02 0.02 0.02"/></geometry>
+      <material name="ur_red"><color rgba="0.9 0.2 0.2 1"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.02 0.02 0.02"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="0.05"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/>
+    </inertial>
+  </link>
+
+</robot>

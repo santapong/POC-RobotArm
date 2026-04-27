@@ -37,12 +37,15 @@ def _add_joint_sliders(sim: RobotArmSim) -> list[int]:
 
 def run(
     urdf_path: Optional[str] = None,
+    robot_name: Optional[str] = None,
     hz: float = 240.0,
     bridge: Optional[SimBridge] = None,
     stop_event: Optional[threading.Event] = None,
 ) -> None:
     if bridge is None:
-        sim = RobotArmSim(urdf_path=urdf_path, use_gui=True)
+        sim = RobotArmSim(
+            urdf_path=urdf_path, robot_name=robot_name, use_gui=True
+        )
         owns_sim = True
     else:
         sim = bridge.sim
@@ -67,6 +70,11 @@ def run(
     try:
         while sim.is_connected():
             if stop_event is not None and stop_event.is_set():
+                break
+            # Watchdog: if the user closed the window, propagate the stop.
+            if not sim.is_connected():  # pragma: no cover (race-condition guard)
+                if stop_event is not None:
+                    stop_event.set()
                 break
 
             # If the LLM-driven trajectory is active, sliders shouldn't fight it.
@@ -112,23 +120,36 @@ def run(
     except KeyboardInterrupt:
         pass
     finally:
+        # Always tell the REPL thread to stop, even on exception.
+        if stop_event is not None:
+            stop_event.set()
         if owns_sim:
             sim.disconnect()
 
 
 def main() -> None:
+    from src.robots.catalog import list_names
+
     parser = argparse.ArgumentParser(description="3D robot arm simulator (PyBullet GUI)")
+    parser.add_argument(
+        "--robot",
+        default="panda",
+        choices=list_names(),
+        help="Robot to load from the catalog (default: panda).",
+    )
     parser.add_argument(
         "--urdf",
         default=None,
-        help="Path to a URDF (default: kuka_iiwa/model.urdf bundled with PyBullet). "
-        "Try 'franka_panda/panda.urdf' for a 7-DOF Panda.",
+        help="Override: load a raw URDF path instead of a catalog robot.",
     )
     parser.add_argument(
         "--hz", type=float, default=240.0, help="Simulation step rate (default: 240)."
     )
     args = parser.parse_args()
-    run(urdf_path=args.urdf, hz=args.hz)
+    if args.urdf:
+        run(urdf_path=args.urdf, hz=args.hz)
+    else:
+        run(robot_name=args.robot, hz=args.hz)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,8 @@ from typing import Optional, Sequence
 import pybullet as p
 import pybullet_data
 
+from src.robots.catalog import RobotURDFSpec, get_spec
+
 
 @dataclass
 class JointInfo:
@@ -25,15 +27,36 @@ class JointInfo:
 class RobotArmSim:
     """Thin wrapper over PyBullet for arm simulation."""
 
-    DEFAULT_URDF = "kuka_iiwa/model.urdf"
+    DEFAULT_ROBOT = "iiwa"
 
     def __init__(
         self,
         urdf_path: Optional[str] = None,
+        robot_name: Optional[str] = None,
+        ee_link_name: Optional[str] = None,
         use_gui: bool = True,
         gravity: float = -9.81,
         load_plane: bool = True,
     ) -> None:
+        """Initialize the simulator.
+
+        ``robot_name`` and ``urdf_path`` are mutually exclusive. If neither
+        is provided the default robot from the catalog is loaded. When
+        ``robot_name`` is used, the catalog also supplies the end-effector
+        link name and home configuration; ``urdf_path`` callers may pass
+        ``ee_link_name`` explicitly.
+        """
+        if urdf_path is not None and robot_name is not None:
+            raise ValueError("Pass urdf_path OR robot_name, not both.")
+
+        spec: Optional[RobotURDFSpec] = None
+        if urdf_path is None:
+            spec = get_spec(robot_name or self.DEFAULT_ROBOT)
+            urdf_path = spec.urdf_path
+            if ee_link_name is None:
+                ee_link_name = spec.ee_link_name
+
+        self.spec = spec
         self.use_gui = use_gui
         self.client = p.connect(p.GUI if use_gui else p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath(), physicsClientId=self.client)
@@ -53,14 +76,22 @@ class RobotArmSim:
         if load_plane:
             p.loadURDF("plane.urdf", physicsClientId=self.client)
 
-        self.urdf_path = urdf_path or self.DEFAULT_URDF
+        self.urdf_path = urdf_path
         self.robot_id = p.loadURDF(
             self.urdf_path, useFixedBase=True, physicsClientId=self.client
         )
         self.joints = self._collect_movable_joints()
         if not self.joints:
             raise RuntimeError(f"No movable joints found in URDF: {self.urdf_path}")
-        self.end_effector_index = self.joints[-1].index
+        # When loaded via the catalog, trim to the arm DOF (drops gripper /
+        # finger joints that share the URDF — e.g. Panda's two finger joints).
+        if spec is not None and spec.dof and spec.dof < len(self.joints):
+            self.joints = self.joints[: spec.dof]
+        self.ee_link_name = ee_link_name
+        self.end_effector_index = self._resolve_ee_index(ee_link_name)
+        if spec is not None and spec.home_q:
+            home = list(spec.home_q)[: len(self.joints)]
+            self.reset_joint_angles(home + [0.0] * max(0, len(self.joints) - len(home)))
 
     # ------------------------------------------------------------------ joints
 
@@ -78,6 +109,23 @@ class RobotArmSim:
                 JointInfo(index=i, name=info[1].decode(), lower=lower, upper=upper)
             )
         return out
+
+    def _resolve_ee_index(self, ee_link_name: Optional[str]) -> int:
+        """Find the joint index whose child link is the end-effector.
+
+        If ``ee_link_name`` is given, search every joint (including fixed)
+        for the matching link. Otherwise default to the last movable joint
+        — matching the historical behavior of this class.
+        """
+        if ee_link_name is not None:
+            for i in range(p.getNumJoints(self.robot_id, physicsClientId=self.client)):
+                info = p.getJointInfo(self.robot_id, i, physicsClientId=self.client)
+                if info[12].decode() == ee_link_name:
+                    return i
+            raise ValueError(
+                f"ee_link_name='{ee_link_name}' not found in URDF {self.urdf_path}"
+            )
+        return self.joints[-1].index
 
     @property
     def num_joints(self) -> int:

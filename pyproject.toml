@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "poc-robotarm"
+version = "0.2.0"
+description = "Robotics Kinematics Solver + 3D Simulator with optional LLM Interface"
+requires-python = ">=3.10"
+authors = [{name = "POC-RobotArm contributors"}]
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Core install is intentionally light — just enough to run the catalog
+# tests and import the simulator. Heavy dependencies live in extras.
+dependencies = [
+    "numpy>=1.24,<2.0",
+]
+
+[project.optional-dependencies]
+sim = ["pybullet>=3.2.5"]
+rtb = [
+    "roboticstoolbox-python>=1.1.0",
+    "scipy>=1.10.0",
+    "spatialmath-python>=1.1.0",
+    "matplotlib>=3.7.0",
+]
+llm = ["ollama>=0.4.0"]
+gui = ["Pillow>=10.0"]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.5",
+]
+all = [
+    "pybullet>=3.2.5",
+    "roboticstoolbox-python>=1.1.0",
+    "scipy>=1.10.0",
+    "spatialmath-python>=1.1.0",
+    "matplotlib>=3.7.0",
+    "ollama>=0.4.0",
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+robotarm = "src.main:main"
+robotarm-sim = "src.simulation.gui:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.urdf", "*.md", "assets/**/*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "gui: tests that require a real GUI (skipped unless RUN_GUI_TESTS=1)",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

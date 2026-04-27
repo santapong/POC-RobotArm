@@ -1,2 +1,6 @@
-from .predefined import get_panda, get_ur5, list_robots, get_robot
-from .custom import CustomRobot
+"""Robot models.
+
+Top-level imports kept minimal so the simulator path (``src.robots.catalog``)
+is importable without the heavyweight ``roboticstoolbox`` dependency. Use
+``from src.robots.predefined import ...`` to reach the rtb-backed code.
+"""

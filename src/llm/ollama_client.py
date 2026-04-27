@@ -35,7 +35,7 @@ Important:
 - Joint angles for ``forward_kinematics``/``inverse_kinematics`` and ``sim_set_joints`` are in RADIANS. Convert if the user gives degrees.
 - ``sim_set_joint`` takes DEGREES for ergonomics.
 - Positions are in METRES.
-- For the Panda robot, there are 7 joints. For UR5, there are 6 joints. The default simulator robot is a 7-DOF Kuka IIWA.
+- The simulator can load these robots: ``panda`` (7 DOF, default), ``ur5`` (6 DOF), ``iiwa`` (7 DOF). The kinematics tools also know ``panda`` and ``ur5``.
 - ``sim_*`` tools may return ``{"ok": false, "error_code": "..."}`` — read the error and explain it; common codes: SIM_DISCONNECTED, IK_UNREACHABLE, JOINT_LIMIT_CLAMPED, SIM_TIMEOUT, INVALID_ARG.
 """
 

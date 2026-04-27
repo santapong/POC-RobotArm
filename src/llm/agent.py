@@ -12,14 +12,23 @@ class RobotArmAgent:
     and call FK/IK/visualization tools.
 
     Falls back to a simple command parser if Ollama is not available.
+
+    For testing or offline UAT, callers may inject a ``client`` that
+    matches the ``OllamaClient`` surface (``chat`` / ``reset`` /
+    ``check_connection``) — see ``src.llm.fake_client.FakeOllamaClient``.
     """
 
-    def __init__(self, model: str = "llama3.1"):
+    def __init__(self, model: str = "llama3.1", client: object | None = None):
         self.model = model
-        self.ollama_client: OllamaClient | None = None
+        self.ollama_client = client
         self._llm_available = False
 
-        if OLLAMA_AVAILABLE:
+        if client is not None:
+            try:
+                self._llm_available = bool(client.check_connection())
+            except Exception:
+                self._llm_available = False
+        elif OLLAMA_AVAILABLE:
             try:
                 self.ollama_client = OllamaClient(model=model)
                 self._llm_available = self.ollama_client.check_connection()

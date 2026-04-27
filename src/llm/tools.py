@@ -371,9 +371,13 @@ def execute_tool(name: str, arguments: dict) -> str:
 
             def _reset(sim):
                 bridge.cancel_trajectory()
-                zeros = [0.0] * sim.num_joints
-                sim.reset_joint_angles(zeros)
-                sim.set_joint_targets(zeros)
+                # Prefer the catalog's home pose; fall back to all zeros.
+                home = list(sim.spec.home_q) if sim.spec and sim.spec.home_q else []
+                if len(home) < sim.num_joints:
+                    home = home + [0.0] * (sim.num_joints - len(home))
+                home = home[: sim.num_joints]
+                sim.reset_joint_angles(home)
+                sim.set_joint_targets(home)
 
             try:
                 bridge.submit(_reset)
@@ -401,6 +405,8 @@ def execute_tool(name: str, arguments: dict) -> str:
                 applied = max(joint.lower, min(joint.upper, requested))
                 target = list(cur)
                 target[idx] = applied
+                # Snap and hold so the visual update is immediate.
+                sim.reset_joint_angles(target)
                 sim.set_joint_targets(target)
                 return {
                     "requested": requested,
@@ -447,6 +453,7 @@ def execute_tool(name: str, arguments: dict) -> str:
                     if ca != a:
                         any_clamp = True
                     clamped.append(ca)
+                sim.reset_joint_angles(clamped)
                 sim.set_joint_targets(clamped)
                 return {"clamped": any_clamp, "applied": clamped}
 
