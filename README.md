@@ -1,98 +1,121 @@
 # POC-RobotArm
 
-Robotics Kinematics Solver with LLM Interface - A proof-of-concept for solving Forward Kinematics (FK) and Inverse Kinematics (IK) for robot arms, with a natural language interface powered by a local LLM (Ollama).
+Robotics kinematics solver + 3D simulator + optional natural-language interface, all running as a desktop program (no website).
 
-## Features
+## What you can do
 
-- **Forward Kinematics (FK)**: Compute end-effector position/orientation from joint angles
-- **Inverse Kinematics (IK)**: Find joint angles to reach a target pose (Levenberg-Marquardt, Newton-Raphson, Gauss-Newton)
-- **Predefined Robots**: Franka Emika Panda (7-DOF), Universal Robots UR5 (6-DOF)
-- **Custom Robots**: Define your own robot arm using DH parameters
-- **3D Visualization**: Matplotlib-based arm plotting and trajectory visualization
-- **LLM Chat Interface**: Ask questions in natural language via Ollama (local LLM)
-- **Direct Command Mode**: Works without LLM as a CLI tool
+- Run a 3D PyBullet simulator for **Panda**, **UR5**, or **KUKA IIWA**, controlled by sliders or by the LLM
+- Solve forward / inverse kinematics from Python or the CLI
+- Talk to the arm in natural language (real Ollama or the bundled deterministic fake)
+- Run the full UAT acceptance harness: `make uat`
 
-## Setup
+## Install
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# (Optional) Install Ollama for LLM features
-# https://ollama.ai
-# Then pull a model:
-ollama pull llama3.1
+python -m venv .venv && source .venv/bin/activate
+pip install -e .[sim,dev]                # minimum — simulator + tests
+pip install -e .[sim,rtb,dev]            # add the FK/IK kinematics stack
+pip install -e .[all,dev]                # everything (incl. Ollama, Pillow)
 ```
 
-## Usage
+Tested on Ubuntu 22.04 with Python 3.10 / 3.11. Other Linux distros should work; macOS / Windows are not part of the UAT scope (see `docs/UAT_CHECKLIST.md`).
 
-### Interactive Mode (with LLM)
-```bash
-python -m src.main
-```
-
-Example queries:
-- "What is the end-effector position of the Panda at joint angles all zeros?"
-- "Find joint angles to reach position (0.5, 0, 0.5) with the Panda"
-- "List available robots"
-- "Plot the UR5 at angles 0, -1.57, 1.57, 0, 0, 0"
-
-### Direct Command Mode (no LLM needed)
-```bash
-python -m src.main --no-llm
-```
-
-Commands:
-```
-list                          - List available robots
-info <robot>                  - Get robot details
-fk <robot> <angles...>        - Forward kinematics
-ik <robot> <x> <y> <z>        - Inverse kinematics
-plot <robot> <angles...>       - Visualize robot
-```
-
-### Python API
-```python
-from src.robots.predefined import get_panda
-from src.kinematics.forward import solve_fk
-from src.kinematics.inverse import solve_ik
-
-# Forward Kinematics
-panda = get_panda()
-result = solve_fk(panda, [0, -0.3, 0, -2.2, 0, 2.0, 0.79])
-print(result["position"])  # [x, y, z]
-
-# Inverse Kinematics
-ik_result = solve_ik(panda, [0.5, 0.0, 0.5])
-print(ik_result["joint_angles"])
-```
-
-### Run Examples
-```bash
-python examples/demo_fk.py    # Forward kinematics demo
-python examples/demo_ik.py    # Inverse kinematics demo
-python examples/demo_llm_chat.py  # LLM chat demo
-```
-
-## Testing
+## Quickstart
 
 ```bash
-pytest tests/ -v
+make sim                                 # interactive simulator (Panda)
+python -m src.simulation --robot ur5     # UR5 instead
+python -m src.simulation --robot iiwa    # KUKA IIWA
+
+make uat                                 # automated UAT harness (10 stories)
+make test                                # 31 headless tests
+RUN_GUI_TESTS=1 pytest tests/test_gui_smoke.py     # opens GUI, saves PNG
 ```
 
-## Project Structure
+## Talk to the arm
+
+```bash
+python -m src.main --sim                 # real Ollama + 3D simulator
+python -m src.main --sim --fake-llm      # deterministic fake LLM (no network)
+python -m src.main --sim --no-llm        # direct text commands only
+```
+
+Direct commands available in `--no-llm` mode:
+
+```
+list                          List FK/IK robots
+info <robot>                  Robot details
+fk <robot> <angles...>        Forward kinematics
+ik <robot> <x> <y> <z>        Inverse kinematics
+plot <robot> <angles...>      Matplotlib visualization
+sim state                     Live simulator state
+sim move <x> <y> <z>          IK move + place a target marker
+sim joint <idx> <deg>         Drive a single joint
+sim reset                     Return to the catalog home pose
+```
+
+## Architecture
 
 ```
 src/
-├── robots/          # Robot model definitions (Panda, UR5, custom)
-├── kinematics/      # FK and IK solvers
-├── visualization/   # 3D plotting
-├── llm/             # Ollama LLM agent with tool calling
-└── main.py          # CLI entry point
+├── robots/
+│   ├── catalog.py        # rtb-free URDF catalog (panda, ur5, iiwa)
+│   ├── predefined.py     # rtb robot models (lazy import)
+│   └── custom.py
+├── kinematics/           # FK/IK solvers (rtb)
+├── visualization/        # matplotlib plots
+├── simulation/
+│   ├── engine.py         # PyBullet wrapper (RobotArmSim)
+│   ├── bridge.py         # Thread-safe Queue+Future bridge for the LLM
+│   ├── gui.py            # PyBullet GUI loop with debug sliders
+│   └── __main__.py
+└── llm/
+    ├── agent.py          # RobotArmAgent — accepts injected client
+    ├── tools.py          # FK/IK + sim_* tools the LLM can call
+    ├── ollama_client.py  # Real Ollama client
+    └── fake_client.py    # Deterministic stand-in (UAT, CI)
+
+assets/urdf/ur5/          # Hand-written UR5 URDF (primitive shapes)
+docs/                     # UAT checklist, report template, Ollama manual
+scripts/uat_run.py        # Automated UAT harness
+.github/workflows/ci.yml  # Headless tests + lint + rtb-extras job
 ```
 
-## Tech Stack
+### How the LLM drives the simulator
 
-- [roboticstoolbox-python](https://github.com/petercorke/robotics-toolbox-python) - FK/IK engine
-- [Ollama](https://ollama.ai) - Local LLM for natural language interface
-- numpy, scipy, matplotlib
+PyBullet is thread-bound to the thread that called `p.connect`, so the GUI loop owns it. The LLM REPL runs on a worker thread; its `sim_*` tool calls go through `SimBridge` — a `queue.Queue[Command]` drained on every GUI tick. Results flow back via `concurrent.futures.Future`. A read-only state snapshot is updated each tick so `sim_get_state` never blocks.
+
+Errors come back as JSON with a code and message:
+- `IK_UNREACHABLE` — IK couldn't reach the target within tolerance
+- `JOINT_LIMIT_CLAMPED` — requested angle was clamped
+- `SIM_DISCONNECTED` — simulator not running
+- `SIM_TIMEOUT` — GUI loop didn't drain in time
+- `INVALID_ARG` — bad joint index or wrong DOF count
+
+## UAT readiness
+
+This branch is the UAT-readiness sprint. Status:
+
+- ✅ M1 — Robot/URDF coherence (Panda + UR5 + IIWA all load)
+- ✅ M2 — Lifecycle hardening (clean exit on window close)
+- ✅ M3 — Fake LLM client + integration tests
+- ✅ M4 — GUI smoke test + checklist
+- ✅ M5 — pyproject.toml + Makefile + GitHub Actions CI
+- ✅ M6 — `scripts/uat_run.py` + report template + Ollama manual
+- ✅ M7 — README + INSTALL
+
+See `docs/UAT_CHECKLIST.md` for the tester checklist and `docs/UAT_REPORT_TEMPLATE.md` for the signoff form.
+
+## Troubleshooting
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `ModuleNotFoundError: roboticstoolbox` | rtb extra not installed | `pip install -e .[rtb]` |
+| `pybullet.error: Cannot connect to GUI` | Headless box, no display | Run `python -m src.simulation` on a desktop |
+| GUI opens, REPL hangs after window close | Old build (pre-M2) | Rebuild from current commit |
+| `IK_UNREACHABLE` for an obviously-reachable point | URDF override pointing at a model whose EE link doesn't match catalog | Use `--robot <name>` instead of `--urdf` |
+| LLM ignores tool calls | Model lacks tool-calling support | Use `llama3.1` or another tool-capable model |
+
+## License
+
+See `assets/LICENSES.md` for asset provenance. Code is provided as-is for proof-of-concept use.

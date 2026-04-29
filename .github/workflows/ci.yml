@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main, claude/**]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-headless:
+    name: Headless tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        python: ["3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install (sim + dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[sim,dev]
+      - name: Run headless tests
+        run: make test
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          python -m pip install ruff
+      - run: ruff check src tests
+
+  test-rtb:
+    name: rtb-gated tests
+    runs-on: ubuntu-22.04
+    # rtb pulls heavy scientific stack; run only on main/PR to main.
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install with rtb
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[sim,rtb,dev]
+      - name: Run all tests
+        run: make test-rtb

@@ -3,5 +3,6 @@ numpy>=1.24.0,<2.0.0
 scipy>=1.10.0
 spatialmath-python>=1.1.0
 matplotlib>=3.7.0
+pybullet>=3.2.5
 ollama>=0.4.0
 pytest>=7.0.0
