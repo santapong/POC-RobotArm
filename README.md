@@ -4,9 +4,10 @@ Robotics kinematics solver + 3D simulator + optional natural-language interface,
 
 ## What you can do
 
-- Run a 3D PyBullet simulator for **Panda**, **UR5**, or **KUKA IIWA**, controlled by sliders or by the LLM
+- Run a 3D PyBullet simulator for **Panda**, **UR5**, **KUKA IIWA**, or **ABB IRB 1200**, controlled by sliders or by the LLM
 - Solve forward / inverse kinematics from Python or the CLI
 - Talk to the arm in natural language (real Ollama or the bundled deterministic fake)
+- Build a vendor-neutral motion program (`Move`, `Tool`, `WObj`, `Speed`, `Zone`) and **export ABB RAPID `.mod`** ready for a RobotStudio Virtual Controller
 - Run the full UAT acceptance harness: `make uat`
 
 ## Install
@@ -59,7 +60,7 @@ sim reset                     Return to the catalog home pose
 ```
 src/
 ├── robots/
-│   ├── catalog.py        # rtb-free URDF catalog (panda, ur5, iiwa)
+│   ├── catalog.py        # rtb-free URDF catalog (panda, ur5, iiwa, abb_irb1200)
 │   ├── predefined.py     # rtb robot models (lazy import)
 │   └── custom.py
 ├── kinematics/           # FK/IK solvers (rtb)
@@ -69,17 +70,40 @@ src/
 │   ├── bridge.py         # Thread-safe Queue+Future bridge for the LLM
 │   ├── gui.py            # PyBullet GUI loop with debug sliders
 │   └── __main__.py
-└── llm/
-    ├── agent.py          # RobotArmAgent — accepts injected client
-    ├── tools.py          # FK/IK + sim_* tools the LLM can call
-    ├── ollama_client.py  # Real Ollama client
-    └── fake_client.py    # Deterministic stand-in (UAT, CI)
+├── llm/
+│   ├── agent.py          # RobotArmAgent — accepts injected client
+│   ├── tools.py          # FK/IK + sim_* tools the LLM can call
+│   ├── ollama_client.py  # Real Ollama client
+│   └── fake_client.py    # Deterministic stand-in (UAT, CI)
+├── motion/
+│   └── ir.py             # Vendor-neutral motion IR (Move, Tool, WObj, ...)
+├── drivers/
+│   ├── base.py           # Driver Protocol + RobotState (sim & real share)
+│   └── sim/sim_driver.py # SimBridge adapter implementing Driver
+└── post/
+    ├── base.py           # Post Protocol
+    └── abb_rapid.py      # ABB RAPID emitter (.mod)
 
-assets/urdf/ur5/          # Hand-written UR5 URDF (primitive shapes)
-docs/                     # UAT checklist, report template, Ollama manual
-scripts/uat_run.py        # Automated UAT harness
-.github/workflows/ci.yml  # Headless tests + lint + rtb-extras job
+assets/urdf/{ur5, abb_irb1200}/   # Hand-written URDFs (primitive shapes)
+examples/demo_export_rapid.py     # Build a Program + emit RAPID
+docs/                             # UAT checklist, report template, Ollama manual
+scripts/uat_run.py                # Automated UAT harness
+.github/workflows/ci.yml          # Headless tests + lint + rtb-extras job
 ```
+
+### Export an ABB RAPID program
+
+Build a vendor-neutral `Program` and emit it as a RAPID `.mod` ready for a
+RobotStudio Virtual Controller:
+
+```bash
+python examples/demo_export_rapid.py
+```
+
+The emitter (`src/post/abb_rapid.py`) handles the unit conversions
+(metres → mm, radians → degrees, IR `wxyz` quaternions → RAPID `[q1..q4]`),
+re-uses predefined `fine`/`z10`/`v100` names where the IR values match,
+and declares custom `speeddata` / `zonedata` only when needed.
 
 ### How the LLM drives the simulator
 
