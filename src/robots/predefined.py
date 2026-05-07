@@ -21,9 +21,58 @@ def get_ur5() -> rtb.Robot:
     return _robot_registry["ur5"]
 
 
+def get_abb_irb1200() -> rtb.Robot:
+    """Get an ABB IRB 1200-5/0.9 6-DOF industrial robot.
+
+    rtb does not ship a built-in IRB1200 model (only IRB140), so we
+    construct a ``DHRobot`` from the published DH parameters of the
+    IRB 1200-5/0.9 variant (lengths in meters):
+
+        Link  a       alpha     d        offset    qlim (rad)
+        1     0       -pi/2     0.3991   0         [-2.967,  2.967]
+        2     0.350    0        0       -pi/2      [-1.745,  2.356]
+        3     0.042   -pi/2     0        0         [-3.491,  1.222]
+        4     0        pi/2     0.351    0         [-4.712,  4.712]
+        5     0       -pi/2     0        0         [-2.269,  2.269]
+        6     0        0        0.082    0         [-6.981,  6.981]
+    """
+    if "abb_irb1200" not in _robot_registry:
+        deg = np.pi / 180.0
+        links = [
+            rtb.RevoluteDH(
+                a=0.0, alpha=-np.pi / 2, d=0.3991, offset=0.0,
+                qlim=[-170 * deg, 170 * deg],
+            ),
+            rtb.RevoluteDH(
+                a=0.350, alpha=0.0, d=0.0, offset=-np.pi / 2,
+                qlim=[-100 * deg, 135 * deg],
+            ),
+            rtb.RevoluteDH(
+                a=0.042, alpha=-np.pi / 2, d=0.0, offset=0.0,
+                qlim=[-200 * deg, 70 * deg],
+            ),
+            rtb.RevoluteDH(
+                a=0.0, alpha=np.pi / 2, d=0.351, offset=0.0,
+                qlim=[-270 * deg, 270 * deg],
+            ),
+            rtb.RevoluteDH(
+                a=0.0, alpha=-np.pi / 2, d=0.0, offset=0.0,
+                qlim=[-130 * deg, 130 * deg],
+            ),
+            rtb.RevoluteDH(
+                a=0.0, alpha=0.0, d=0.082, offset=0.0,
+                qlim=[-400 * deg, 400 * deg],
+            ),
+        ]
+        robot = rtb.DHRobot(links, name="abb_irb1200", manufacturer="ABB")
+        _robot_registry["abb_irb1200"] = robot
+    return _robot_registry["abb_irb1200"]
+
+
 _FACTORY = {
     "panda": get_panda,
     "ur5": get_ur5,
+    "abb_irb1200": get_abb_irb1200,
 }
 
 

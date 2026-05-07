@@ -40,8 +40,25 @@ def test_catalog_robot_reaches_target(name):
 
 
 def test_catalog_keys_match_advertised():
-    expected = {"panda", "ur5", "iiwa"}
+    expected = {"panda", "ur5", "iiwa", "abb_irb1200"}
     assert set(CATALOG.keys()) == expected
+
+
+def test_abb_irb1200_specifics():
+    """ABB IRB 1200 must declare 6-DOF and load with the expected joint count."""
+    spec = get_spec("abb_irb1200")
+    assert spec.dof == 6
+    assert spec.ee_link_name == "ee_link"
+    assert len(spec.home_q) == 6
+
+    sim = RobotArmSim(robot_name="abb_irb1200", use_gui=False)
+    try:
+        assert sim.num_joints == 6
+        # Joint names should follow the joint1..joint6 convention used in the URDF.
+        names = [j.name for j in sim.joints]
+        assert names == [f"joint{i}" for i in range(1, 7)]
+    finally:
+        sim.disconnect()
 
 
 def test_unknown_robot_raises():
