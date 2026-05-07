@@ -1,7 +1,6 @@
 """Ollama client wrapper for local LLM interaction with tool calling."""
 
 import json
-from typing import Generator
 
 try:
     import ollama

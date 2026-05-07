@@ -1,7 +1,7 @@
 """Predefined robot models using roboticstoolbox."""
 
-import roboticstoolbox as rtb
 import numpy as np
+import roboticstoolbox as rtb
 
 # Registry of loaded robot instances
 _robot_registry: dict[str, rtb.Robot] = {}

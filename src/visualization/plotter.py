@@ -1,10 +1,10 @@
 """3D robot arm visualization using matplotlib."""
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")  # Non-interactive backend by default
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 import roboticstoolbox as rtb
 
 from src.kinematics.forward import solve_fk_all_joints

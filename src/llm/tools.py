@@ -315,8 +315,8 @@ def execute_tool(name: str, arguments: dict) -> str:
     """Execute a tool by name and return a JSON string result."""
     try:
         if name == "forward_kinematics":
-            from src.robots.predefined import get_robot
             from src.kinematics.forward import solve_fk
+            from src.robots.predefined import get_robot
 
             robot = get_robot(arguments["robot_name"])
             result = solve_fk(robot, arguments["joint_angles"])
@@ -325,8 +325,8 @@ def execute_tool(name: str, arguments: dict) -> str:
             return json.dumps(result, indent=2)
 
         elif name == "inverse_kinematics":
-            from src.robots.predefined import get_robot
             from src.kinematics.inverse import solve_ik
+            from src.robots.predefined import get_robot
 
             robot = get_robot(arguments["robot_name"])
             orientation = arguments.get("orientation")

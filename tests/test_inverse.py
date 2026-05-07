@@ -1,10 +1,10 @@
 """Tests for inverse kinematics."""
 
 import numpy as np
-import pytest
-from src.robots.predefined import get_panda, get_ur5
+
 from src.kinematics.forward import solve_fk
 from src.kinematics.inverse import solve_ik
+from src.robots.predefined import get_panda, get_ur5
 
 
 class TestInverseKinematics:

@@ -2,8 +2,9 @@
 
 import numpy as np
 import pytest
-from src.robots.predefined import get_panda, get_ur5
+
 from src.kinematics.forward import solve_fk, solve_fk_all_joints
+from src.robots.predefined import get_panda, get_ur5
 
 
 class TestForwardKinematics:

@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("pybullet")
 
-from src.robots.catalog import CATALOG, list_names, get_spec  # noqa: E402
+from src.robots.catalog import CATALOG, get_spec, list_names  # noqa: E402
 from src.simulation.engine import RobotArmSim  # noqa: E402
 
 

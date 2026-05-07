@@ -14,7 +14,8 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from concurrent.futures import Future, TimeoutError as FuturesTimeoutError
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
