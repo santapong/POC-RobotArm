@@ -9,12 +9,12 @@ each.
 
 | Agent | Role | Read | Write | Run | Web | Model |
 |---|---|:---:|:---:|:---:|:---:|---|
-| `project-manager` | Surveys, plans, dispatches workers, verifies, commits | yes | no | yes | no | opus |
+| `project-manager` | Surveys, plans, dispatches workers, verifies, commits | yes | no | yes | no | **opus** |
+| `architect` | Designs the implementation: paths, signatures, edge cases, test strategy | yes | no | read-only | no | **opus** |
+| `reviewer` | Audits the implementer's diff: correctness, security, style, threading | yes | no | read-only | no | **opus** |
 | `researcher` | Read-only deep-dive on existing code or external libs/APIs | yes | no | read-only | yes | sonnet |
-| `architect` | Designs the implementation: paths, signatures, edge cases, test strategy | yes | no | read-only | no | opus |
-| `implementer` | Writes code from the architect's design. Runs ruff. | yes | yes | yes | no | opus |
-| `reviewer` | Audits the implementer's diff: correctness, security, style, threading | yes | no | read-only | no | opus |
-| `tester` | Writes and runs pytest. Reports failures honestly. | yes | yes (tests only) | yes | no | opus |
+| `implementer` | Writes code from the architect's design. Runs ruff. | yes | yes | yes | no | sonnet |
+| `tester` | Writes and runs pytest. Reports failures honestly. | yes | yes (tests only) | yes | no | sonnet |
 | `devops` | Edits pyproject / Makefile / CI / .gitignore / console scripts | yes | yes (config only) | yes | no | sonnet |
 | `documenter` | README, docs/, INSTALL, public docstrings | yes | yes (docs only) | yes | no | sonnet |
 
@@ -72,10 +72,20 @@ You can call individual workers for narrow asks:
 
 ## Model choices
 
-- `opus` for roles where judgment dominates: PM (planning), architect (design), implementer (subtle correctness in this repo — quaternions, threading, IR validation), reviewer (catching what others miss), tester (designing tests that actually exercise edge cases).
-- `sonnet` for roles where the work is mostly mechanical given a clear spec: researcher (summarization), devops (edit config to match a list), documenter (write prose to a known audience).
+The rule: **opus where judgment dominates, sonnet where the work is execution against a clear spec.**
 
-This is a cost / quality balance, not a hard rule. If you find a sonnet role producing weak output for your project, flip it to `opus` in its frontmatter. If opus feels overkill for simpler features, drop the implementer / tester to `sonnet`.
+- `opus` (3 agents): PM, architect, reviewer.
+  - PM plans the team and resolves contradictions between phases.
+  - Architect enumerates edge cases and shapes APIs that the rest of the team will hit one-to-one.
+  - Reviewer catches what the implementer missed — necessarily a judgment call.
+- `sonnet` (5 agents): researcher, implementer, tester, devops, documenter.
+  - Researcher summarizes and cites.
+  - Implementer follows the architect's design top-to-bottom.
+  - Tester translates the architect's test strategy into pytest functions.
+  - Devops edits config files to a clear list.
+  - Documenter writes prose for a known audience.
+
+This balance assumes the architect's design is solid — when it is, the implementer and tester are doing translation, not invention. If you find sonnet output weak on this repo specifically (quaternions, threading, IR invariants are subtle), flip `model: sonnet` to `model: opus` in `implementer.md` and `tester.md`. The cost increase is roughly 5x on those calls.
 
 ## When NOT to use this workflow
 
