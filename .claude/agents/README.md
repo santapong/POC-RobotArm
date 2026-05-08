@@ -5,9 +5,9 @@ Four reusable Claude Code sub-agents, defined as markdown files in this director
 | Agent | Role | Tools | Model |
 |---|---|---|---|
 | `project-manager` | Surveys the project, plans phased work, dispatches workers, verifies, commits, reports | Read + Bash + TodoWrite + Agent (no Write/Edit) | opus |
-| `architect` | Designs the implementation: file paths, API signatures, edge cases, test strategy. Read-only. | Read + Bash (read-only) | sonnet |
-| `implementer` | Writes the code from the architect's design. Runs ruff. No tests. | Read + Write + Edit + Bash | sonnet |
-| `tester` | Writes and runs pytest tests. Reports pass/fail. Does not modify implementation. | Read + Write + Edit + Bash | sonnet |
+| `architect` | Designs the implementation: file paths, API signatures, edge cases, test strategy. Read-only. | Read + Bash (read-only) | opus |
+| `implementer` | Writes the code from the architect's design. Runs ruff. No tests. | Read + Write + Edit + Bash | opus |
+| `tester` | Writes and runs pytest tests. Reports pass/fail. Does not modify implementation. | Read + Write + Edit + Bash | opus |
 
 ## How they fit together
 
