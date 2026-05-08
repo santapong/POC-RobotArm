@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "poc-robotarm"
-version = "0.2.0"
-description = "Robotics Kinematics Solver + 3D Simulator with optional LLM Interface"
+version = "0.3.0"
+description = "Virtual robot station with CAM toolpaths and multi-vendor program export (RAPID/KRL/URScript)"
 requires-python = ">=3.10"
 authors = [{name = "POC-RobotArm contributors"}]
 readme = "README.md"
@@ -18,7 +18,8 @@ classifiers = [
 ]
 
 # Core install is intentionally light — just enough to run the catalog
-# tests and import the simulator. Heavy dependencies live in extras.
+# tests, import the simulator, and use the motion IR + post-processors
+# (which are stdlib-only). Heavy dependencies live in extras.
 dependencies = [
     "numpy>=1.24,<2.0",
 ]
@@ -33,6 +34,19 @@ rtb = [
 ]
 llm = ["ollama>=0.4.0"]
 gui = ["Pillow>=10.0"]
+station = [
+    "trimesh>=4.0",
+    "ezdxf>=1.0",
+]
+ui = [
+    "PySide6>=6.5",
+    "trimesh>=4.0",
+    "ezdxf>=1.0",
+]
+cam = [
+    "trimesh>=4.0",
+    "ezdxf>=1.0",
+]
 dev = [
     "pytest>=7.0",
     "ruff>=0.5",
@@ -45,11 +59,15 @@ all = [
     "matplotlib>=3.7.0",
     "ollama>=0.4.0",
     "Pillow>=10.0",
+    "PySide6>=6.5",
+    "trimesh>=4.0",
+    "ezdxf>=1.0",
 ]
 
 [project.scripts]
 robotarm = "src.main:main"
 robotarm-sim = "src.simulation.gui:main"
+robotarm-station = "src.ui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
