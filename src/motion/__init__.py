@@ -3,7 +3,8 @@
 The :mod:`src.motion.ir` module defines the data model that round-trips
 between the simulator, the toolpath planner, and post-processors that emit
 ABB RAPID, KUKA KRL, and UR Script. Importing from this package re-exports
-the public API directly.
+the public API directly, including the Phase 2 :class:`Recorder` /
+:class:`Player` pair that bolts record/playback on top of the IR.
 """
 
 from .ir import (
@@ -29,6 +30,8 @@ from .ir import (
     load,
     to_dict,
 )
+from .player import Player
+from .recorder import Recorder
 
 __all__ = [
     "Comment",
@@ -38,10 +41,12 @@ __all__ = [
     "JointTarget",
     "Move",
     "MoveKind",
+    "Player",
     "PoseTarget",
     "Procedure",
     "ProcedureStep",
     "Program",
+    "Recorder",
     "SpeedData",
     "ToolData",
     "WObjData",
