@@ -981,8 +981,15 @@ def interpolate_program(
     procedure = proc_map["main"]
 
     # Seed joint configuration from robot.q if non-zero.
-    if np.any(robot.q != 0.0):
-        current_q = np.array(robot.q, dtype=float)
+    # rtb DHRobot defaults robot.q to None; handle defensively so the
+    # ABB IRB1200 (and any other DH-built model) doesn't crash here.
+    q_attr = getattr(robot, "q", None)
+    if q_attr is not None:
+        q_arr = np.asarray(q_attr, dtype=float)
+        if np.any(q_arr != 0.0):
+            current_q = q_arr
+        else:
+            current_q = np.zeros(robot.n, dtype=float)
     else:
         current_q = np.zeros(robot.n, dtype=float)
 

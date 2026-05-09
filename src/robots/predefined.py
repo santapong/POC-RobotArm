@@ -23,6 +23,50 @@ def get_ur5() -> rtb.Robot:
     return _robot_registry["ur5"]
 
 
+def get_iiwa() -> rtb.Robot:
+    """Get a KUKA LBR iiwa 14 R820 7-DOF collaborative arm.
+
+    rtb ships ``rtb.models.LBR`` but it requires the ``rtbdata`` package; to
+    keep the kinematics extra slim we hand-build a ``DHRobot`` from the
+    KUKA LBR iiwa 14 R820 specification (lengths in metres, joint limits
+    from the KUKA datasheet axes A1..A7):
+
+        Link  a   alpha    d        offset    qlim (deg)
+        1     0   -pi/2    0.360    0         [-170, 170]
+        2     0    pi/2    0       -pi/2      [-120, 120]
+        3     0    pi/2    0.420    0         [-170, 170]
+        4     0   -pi/2    0        0         [-120, 120]
+        5     0   -pi/2    0.400    0         [-170, 170]
+        6     0    pi/2    0        0         [-120, 120]
+        7     0    0       0.126    0         [-175, 175]
+
+    Closes a known catalog/factory mismatch: ``RobotArmSim`` and the LLM
+    system prompt advertise ``iiwa`` as a default; without this entry every
+    rtb-using LLM tool crashed on the sim default.
+    """
+    if "iiwa" not in _robot_registry:
+        deg = np.pi / 180.0
+        links = [
+            rtb.RevoluteDH(a=0.0, alpha=-np.pi / 2, d=0.360, offset=0.0,
+                           qlim=[-170 * deg, 170 * deg]),
+            rtb.RevoluteDH(a=0.0, alpha=np.pi / 2, d=0.0, offset=-np.pi / 2,
+                           qlim=[-120 * deg, 120 * deg]),
+            rtb.RevoluteDH(a=0.0, alpha=np.pi / 2, d=0.420, offset=0.0,
+                           qlim=[-170 * deg, 170 * deg]),
+            rtb.RevoluteDH(a=0.0, alpha=-np.pi / 2, d=0.0, offset=0.0,
+                           qlim=[-120 * deg, 120 * deg]),
+            rtb.RevoluteDH(a=0.0, alpha=-np.pi / 2, d=0.400, offset=0.0,
+                           qlim=[-170 * deg, 170 * deg]),
+            rtb.RevoluteDH(a=0.0, alpha=np.pi / 2, d=0.0, offset=0.0,
+                           qlim=[-120 * deg, 120 * deg]),
+            rtb.RevoluteDH(a=0.0, alpha=0.0, d=0.126, offset=0.0,
+                           qlim=[-175 * deg, 175 * deg]),
+        ]
+        robot = rtb.DHRobot(links, name="iiwa", manufacturer="KUKA")
+        _robot_registry["iiwa"] = robot
+    return _robot_registry["iiwa"]
+
+
 def get_abb_irb1200() -> rtb.Robot:
     """Get an ABB IRB 1200-5/0.9 6-DOF industrial robot.
 
@@ -75,6 +119,7 @@ def get_abb_irb1200() -> rtb.Robot:
 _FACTORY = {
     "panda": get_panda,
     "ur5": get_ur5,
+    "iiwa": get_iiwa,
     "abb_irb1200": get_abb_irb1200,
 }
 

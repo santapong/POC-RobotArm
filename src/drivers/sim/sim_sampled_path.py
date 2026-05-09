@@ -124,9 +124,12 @@ class SimSampledPathDriver:
         from src.motion.path import interpolate_program
 
         path = interpolate_program(prog, self._robot, dt_s=self._dt_s, raise_on_violation=False)
-        self._bridge.start_trajectory(
-            [list(s.q_rad) for s in path.samples],
-            dwell_s=self._dt_s,
+        waypoints = [list(s.q_rad) for s in path.samples]
+        # PyBullet has strict thread affinity to the GUI thread; route the
+        # bridge mutation through bridge.submit so set_joint_targets is called
+        # on the right thread.
+        self._bridge.submit(
+            lambda sim: self._bridge.start_trajectory(waypoints, self._dt_s)
         )
         if wait:
             self._wait_until_idle()
@@ -158,9 +161,9 @@ class SimSampledPathDriver:
         from src.motion.path import interpolate_program
 
         path = interpolate_program(prog, self._robot, dt_s=self._dt_s, raise_on_violation=False)
-        self._bridge.start_trajectory(
-            [list(s.q_rad) for s in path.samples],
-            dwell_s=self._dt_s,
+        waypoints = [list(s.q_rad) for s in path.samples]
+        self._bridge.submit(
+            lambda sim: self._bridge.start_trajectory(waypoints, self._dt_s)
         )
         if wait:
             self._wait_until_idle()
@@ -178,9 +181,9 @@ class SimSampledPathDriver:
         from src.motion.path import interpolate_program
 
         path = interpolate_program(prog, self._robot, dt_s=self._dt_s, raise_on_violation=False)
-        self._bridge.start_trajectory(
-            [list(s.q_rad) for s in path.samples],
-            dwell_s=self._dt_s,
+        waypoints = [list(s.q_rad) for s in path.samples]
+        self._bridge.submit(
+            lambda sim: self._bridge.start_trajectory(waypoints, self._dt_s)
         )
         return path
 
