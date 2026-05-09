@@ -1,7 +1,6 @@
 """Main LLM-powered robot arm agent."""
 
-import json
-from .ollama_client import OllamaClient, OLLAMA_AVAILABLE
+from .ollama_client import OLLAMA_AVAILABLE, OllamaClient
 from .tools import execute_tool
 
 
@@ -129,7 +128,7 @@ class RobotArmAgent:
                     "idx": int(parts[2]),
                     "angle_deg": float(parts[3]),
                 })
-            return f"Unknown sim subcommand. Try: sim state | sim move x y z | sim joint idx deg | sim reset"
+            return "Unknown sim subcommand. Try: sim state | sim move x y z | sim joint idx deg | sim reset"
 
         elif cmd == "plot" and len(parts) >= 3:
             robot_name = parts[1]

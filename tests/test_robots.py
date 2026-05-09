@@ -2,8 +2,9 @@
 
 import numpy as np
 import pytest
-from src.robots.predefined import get_panda, get_ur5, list_robots, get_robot, get_robot_info
+
 from src.robots.custom import CustomRobot
+from src.robots.predefined import get_panda, get_robot, get_robot_info, get_ur5, list_robots
 
 
 class TestPredefinedRobots:

@@ -8,3 +8,9 @@ build/
 *.png
 .env
 artifacts/
+
+# Generated robot programs (RAPID, KRL, URScript demo outputs)
+examples/*.mod
+examples/*.src
+examples/*.dat
+examples/*.script

@@ -98,7 +98,7 @@ def _us2_list(ctx: _UATContext) -> tuple[bool, str]:
     from src.robots.catalog import list_names
 
     names = set(list_names())
-    expected = {"panda", "ur5", "iiwa"}
+    expected = {"panda", "ur5", "iiwa", "abb_irb1200"}
     return names == expected, f"catalog={sorted(names)}"
 
 
@@ -223,6 +223,202 @@ def _us10_concurrent(ctx: _UATContext) -> tuple[bool, str]:
     return ok, f"final distance to second target={dist:.4f}m"
 
 
+# ---------------------------------------------------------------------------
+# Stories for the expanded scope (motion IR, post-processors, station, CAM, RWS)
+# ---------------------------------------------------------------------------
+
+
+def _build_demo_program():
+    from src.motion.ir import (
+        JointTarget,
+        Move,
+        MoveKind,
+        PoseTarget,
+        Procedure,
+        Program,
+        SpeedData,
+        ToolData,
+        WObjData,
+        ZoneData,
+    )
+
+    tool = ToolData("tGripper", 0.5, (0, 0, 0.12), (1, 0, 0, 0))
+    wobj = WObjData("wTable", (0.5, 0, 0), (1, 0, 0, 0))
+    home = JointTarget((0.0,) * 6)
+    p1 = PoseTarget((0.4, 0.0, 0.3), (0.0, 0.0, 1.0, 0.0))
+    return Program(
+        name="UATDemo",
+        tools=[tool],
+        wobjs=[wobj],
+        procedures=[Procedure("main", body=[
+            Move(MoveKind.MOVE_ABS_J, home, SpeedData(200.0), ZoneData.fine(), tool, wobj),
+            Move(MoveKind.MOVE_L,     p1,   SpeedData(100.0), ZoneData(ZoneData.RADIUS, 10.0),
+                 tool, wobj),
+        ])],
+    )
+
+
+def _us11_rapid_export(ctx: _UATContext) -> tuple[bool, str]:
+    from src.post import RAPIDPost
+
+    src = RAPIDPost().emit(_build_demo_program())
+    ok = (
+        src.startswith("MODULE UATDemo")
+        and "MoveAbsJ j1, v200, fine, tGripper" in src
+        and "MoveL p1, v100, z10, tGripper" in src
+        and src.rstrip().endswith("ENDMODULE")
+    )
+    return ok, f"rapid={len(src)}B"
+
+
+def _us12_krl_export(ctx: _UATContext) -> tuple[bool, str]:
+    from src.post import KRLPost
+
+    src = KRLPost().emit(_build_demo_program())
+    ok = "DEF UATDemo" in src and ("PTP" in src or "LIN" in src)
+    return ok, f"krl={len(src)}B"
+
+
+def _us13_urscript_export(ctx: _UATContext) -> tuple[bool, str]:
+    from src.post import URScriptPost
+
+    src = URScriptPost().emit(_build_demo_program())
+    ok = "def main():" in src and "movel" in src and src.rstrip().endswith("main()")
+    return ok, f"urscript={len(src)}B"
+
+
+def _us14_ir_roundtrip(ctx: _UATContext) -> tuple[bool, str]:
+    import tempfile
+
+    from src.motion.ir import dump, load
+
+    prog = _build_demo_program()
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        path = fh.name
+    try:
+        dump(prog, path)
+        loaded = load(path)
+        ok = loaded == prog
+    finally:
+        Path(path).unlink(missing_ok=True)
+    return ok, f"roundtrip={'OK' if ok else 'MISMATCH'}"
+
+
+def _us15_record_playback(ctx: _UATContext) -> tuple[bool, str]:
+    from unittest.mock import MagicMock
+
+    from src.drivers.base import Driver
+    from src.motion.ir import IOKind, ToolData, WObjData
+    from src.motion.player import Player
+    from src.motion.recorder import Recorder
+
+    tool = ToolData("t0", 0.001, (0, 0, 0), (1, 0, 0, 0))
+    wobj = WObjData("w0", (0, 0, 0), (1, 0, 0, 0))
+    rec = Recorder(default_tool=tool, default_wobj=wobj)
+    rec.record_move_joint((0.0,) * 6)
+    rec.record_move_linear((0.4, 0.0, 0.3), (1.0, 0.0, 0.0, 0.0))
+    rec.record_io("doGrip", 1, IOKind.SET)
+
+    mock = MagicMock(spec=Driver)
+    mock.name = "mock:uat"
+    Player(mock).play_recording(rec)
+    ok = mock.move_joint.called and mock.move_linear.called
+    return ok, f"calls={mock.move_joint.call_count}j+{mock.move_linear.call_count}l"
+
+
+def _us16_station_save_load(ctx: _UATContext) -> tuple[bool, str]:
+    import tempfile
+
+    from src.station.scene import Frame, IOSignal, RobotEntry, Station, dump, load
+
+    station = Station(
+        name="uat_station",
+        frames=(Frame("world", (0, 0, 0), (1, 0, 0, 0)),),
+        robots=(RobotEntry("rob1", "abb_irb1200", "world"),),
+        io_signals=(IOSignal("doGrip", "DO", 0),),
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        path = fh.name
+    try:
+        dump(station, path)
+        ok = load(path) == station
+    finally:
+        Path(path).unlink(missing_ok=True)
+    return ok, f"station_roundtrip={'OK' if ok else 'MISMATCH'}"
+
+
+def _us17_drivers_protocol(ctx: _UATContext) -> tuple[bool, str]:
+    from src.drivers import Driver, RobotState, RWSDriver, SimDriver
+
+    sim = SimDriver(ctx.bridge, "panda", dof=7)
+    rws = RWSDriver(host="0.0.0.0", session=object())
+    ok = (
+        isinstance(sim, Driver)
+        and isinstance(rws, Driver)
+        and RobotState((0.0,) * 6, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), False).moving is False
+    )
+    return ok, "sim+rws conform"
+
+
+def _us18_rws_run_program_flow(ctx: _UATContext) -> tuple[bool, str]:
+    from unittest.mock import MagicMock
+
+    from src.drivers.abb.rws_client import RWSDriver
+
+    session = MagicMock()
+    session.get.return_value = (200, {}, b'{"_embedded":{"_state":[{"ctrlexecstate":"stopped"}]}}')
+    session.post.return_value = (200, {}, b"")
+    drv = RWSDriver(host="vc.local", session=session)
+    drv._connected = True
+    drv.run_program("MODULE M\nPROC main()\nENDPROC\nENDMODULE\n", name="UATTest", wait=False)
+    paths = [c.args[0] for c in session.post.call_args_list]
+    ok = (
+        any("/rw/mastership?action=request" in p for p in paths)
+        and any("/fileservice" in p for p in paths)
+        and any("loadmodule" in p for p in paths)
+        and any("execution?action=start" in p for p in paths)
+    )
+    return ok, f"rws_endpoints={len(paths)}_posts"
+
+
+def _us19_cam_toolpath(ctx: _UATContext) -> tuple[bool, str]:
+    try:
+        import trimesh
+    except ImportError:
+        return True, "skipped: trimesh not installed (optional [cam] extra)"
+
+    import numpy as np
+
+    from src.toolpath.operations import surface_raster
+
+    mesh = trimesh.creation.box(extents=(0.20, 0.10, 0.05))
+    mesh.apply_translation((0.5, 0.0, 0.10))
+    waypoints = surface_raster(
+        mesh,
+        plane_normal=np.array([0.0, 0.0, 1.0]),
+        plane_origin=np.array([0.0, 0.0, 0.125]),
+        step_m=0.02,
+    )
+    ok = len(waypoints) >= 4
+    return ok, f"raster_waypoints={len(waypoints)}"
+
+
+def _us20_ui_module_imports(ctx: _UATContext) -> tuple[bool, str]:
+    try:
+        from PySide6 import QtWidgets
+    except ImportError:
+        return True, "skipped: PySide6 not installed (optional [ui] extra)"
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from src.ui.app import StationMainWindow
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    win = StationMainWindow()
+    ok = win.windowTitle().startswith("POC-RobotArm")
+    win.deleteLater()
+    del app
+    return ok, "PySide6 main window imports + instantiates"
+
+
 # --- main -----------------------------------------------------------------
 
 def main() -> int:
@@ -252,6 +448,16 @@ def main() -> int:
         ("US-8",  "Graceful exit (covered)",              _us8_graceful_exit),
         ("US-9",  "Bad input — polite refusal",           _us9_bad_input),
         ("US-10", "Concurrent commands serialise",        _us10_concurrent),
+        ("US-11", "RAPID export shape + content",         _us11_rapid_export),
+        ("US-12", "KUKA KRL export shape + content",      _us12_krl_export),
+        ("US-13", "UR Script export shape + content",     _us13_urscript_export),
+        ("US-14", "Motion IR JSON round-trip",            _us14_ir_roundtrip),
+        ("US-15", "Record + playback through Driver",     _us15_record_playback),
+        ("US-16", "Station scene save/load JSON",         _us16_station_save_load),
+        ("US-17", "Driver Protocol: SimDriver + RWSDriver", _us17_drivers_protocol),
+        ("US-18", "RWS run_program endpoint flow (mock)", _us18_rws_run_program_flow),
+        ("US-19", "CAM surface_raster (skipped w/o trimesh)", _us19_cam_toolpath),
+        ("US-20", "PySide6 station UI imports (skipped w/o Qt)", _us20_ui_module_imports),
     ]
 
     print()

@@ -7,7 +7,6 @@ import threading
 
 from src.llm.agent import RobotArmAgent
 
-
 BANNER = """
 ╔══════════════════════════════════════════════════╗
 ║    POC-RobotArm: Kinematics Solver with LLM     ║

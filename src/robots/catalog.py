@@ -58,6 +58,14 @@ CATALOG: dict[str, RobotURDFSpec] = {
         home_q=(0.0,) * 7,
         description="KUKA LBR iiwa — 7-DOF collaborative arm (default fallback).",
     ),
+    "abb_irb1200": RobotURDFSpec(
+        name="abb_irb1200",
+        urdf_path=os.path.join(_REPO_ROOT, "assets", "urdf", "abb_irb1200", "irb1200.urdf"),
+        ee_link_name="ee_link",
+        dof=6,
+        home_q=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        description="ABB IRB 1200-5/0.9 industrial 6-DOF arm (primitive-shape URDF).",
+    ),
 }
 
 

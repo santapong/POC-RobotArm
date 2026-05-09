@@ -1,8 +1,7 @@
 """Custom robot definition from DH parameters."""
 
-import numpy as np
 import roboticstoolbox as rtb
-from roboticstoolbox import RevoluteDH, PrismaticDH
+from roboticstoolbox import PrismaticDH, RevoluteDH
 
 from .predefined import register_robot
 

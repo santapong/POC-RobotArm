@@ -25,7 +25,6 @@ import pybullet as p  # noqa: E402
 
 from src.simulation.engine import RobotArmSim  # noqa: E402
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS_DIR = REPO_ROOT / "artifacts"
 
@@ -47,8 +46,8 @@ def _capture_frame(sim: RobotArmSim, path: Path) -> tuple[int, int]:
     )
     rgba = img[2]  # H x W x 4 numpy array (or list of bytes on some builds)
     try:
-        from PIL import Image
         import numpy as np
+        from PIL import Image
 
         arr = np.array(rgba, dtype=np.uint8).reshape(height, width, 4)
         Image.fromarray(arr).save(path)

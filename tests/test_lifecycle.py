@@ -9,7 +9,6 @@ hanging" failure mode flagged in the UAT plan.
 
 from __future__ import annotations
 
-import io
 import sys
 import threading
 import time
