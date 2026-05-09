@@ -35,7 +35,7 @@ def _qlim_6(lo=-3.14, hi=3.14):
 
 
 def _violation(**kw) -> LimitViolation:
-    defaults = {"code": "JOINT_POSITION", "message": "test violation"}
+    defaults = {"error_code": "JOINT_POSITION", "message": "test violation"}
     defaults.update(kw)
     return LimitViolation(**defaults)
 
@@ -70,10 +70,10 @@ def test_validate_move_joint_position_below_min():
     )
     assert len(violations) == 1
     v = violations[0]
-    assert v.code == "JOINT_POSITION"
+    assert v.error_code == "JOINT_POSITION"
     assert v.joint_index == 0
-    assert v.value == pytest.approx(-4.0)
-    assert v.limit == pytest.approx(-3.14)  # lower limit
+    assert v.requested == pytest.approx(-4.0)
+    assert v.allowed == pytest.approx(-3.14)  # lower limit
 
 
 def test_validate_move_joint_position_above_max():
@@ -86,10 +86,10 @@ def test_validate_move_joint_position_above_max():
     )
     assert len(violations) == 1
     v = violations[0]
-    assert v.code == "JOINT_POSITION"
+    assert v.error_code == "JOINT_POSITION"
     assert v.joint_index == 5
-    assert v.value == pytest.approx(4.0)
-    assert v.limit == pytest.approx(3.14)  # upper limit
+    assert v.requested == pytest.approx(4.0)
+    assert v.allowed == pytest.approx(3.14)  # upper limit
 
 
 def test_validate_move_joint_count_mismatch():
@@ -102,7 +102,7 @@ def test_validate_move_joint_count_mismatch():
     )
     assert len(violations) == 1
     v = violations[0]
-    assert v.code == "JOINT_POSITION"
+    assert v.error_code == "JOINT_POSITION"
     assert v.joint_index is None
 
 
@@ -127,13 +127,13 @@ def test_validate_move_singularity_with_jacobian_fn():
     )
     assert len(violations) == 1
     v = violations[0]
-    assert v.code == "SINGULARITY"
+    assert v.error_code == "SINGULARITY"
     assert v.joint_index is None
     # requested value == yoshikawa index
-    assert v.value is not None
-    assert v.value < 0.01
+    assert v.requested is not None
+    assert v.requested < 0.01
     # allowed == the threshold
-    assert v.limit == pytest.approx(0.01)
+    assert v.allowed == pytest.approx(0.01)
 
 
 def test_validate_move_no_singularity_when_jacobian_fn_none():
@@ -156,7 +156,7 @@ def test_validate_move_move_l_skips_joint_position():
         target=target,
         robot_qlim=_qlim_6(-0.001, 0.001),  # very tight limits — but ignored for MOVE_L
     )
-    joint_pos_violations = [v for v in violations if v.code == "JOINT_POSITION"]
+    joint_pos_violations = [v for v in violations if v.error_code == "JOINT_POSITION"]
     assert joint_pos_violations == []
 
 
@@ -185,25 +185,25 @@ def test_assert_no_violations_silent_on_empty():
 
 def test_limit_violation_invalid_code_rejected():
     with pytest.raises(ValueError):
-        LimitViolation(code="BAD", message="x")
+        LimitViolation(error_code="BAD", message="x")
 
 
 def test_limit_violation_invalid_axis_rejected():
     with pytest.raises(ValueError):
-        LimitViolation(code="JOINT_POSITION", message="x", axis="diagonal")
+        LimitViolation(error_code="JOINT_POSITION", message="x", axis="diagonal")
 
 
 def test_limit_violation_to_dict_shape():
     v = LimitViolation(
-        code="JOINT_POSITION",
+        error_code="JOINT_POSITION",
         message="out of range",
         joint_index=2,
         axis=None,
-        value=3.5,
-        limit=3.14,
+        requested=3.5,
+        allowed=3.14,
     )
     d = v.to_dict()
-    expected_keys = {"code", "message", "joint_index", "axis", "value", "limit"}
+    expected_keys = {"error_code", "message", "joint_index", "axis", "requested", "allowed"}
     assert set(d.keys()) == expected_keys
     # Optional fields that are None must still be present (not stripped).
     # axis is None here:
@@ -218,7 +218,7 @@ def test_limit_violation_to_dict_shape():
 
 def test_limits_exceeded_str_includes_messages():
     v1 = _violation(message="joint 0 out of bounds")
-    v2 = _violation(message="singularity detected", code="SINGULARITY")
+    v2 = _violation(message="singularity detected", error_code="SINGULARITY")
     exc = LimitsExceeded([v1, v2])
     s = str(exc)
     assert "joint 0 out of bounds" in s
@@ -240,18 +240,18 @@ def test_llm_tools_limit_violation_json_shape():
     from src.llm.tools import _sim_err  # type: ignore[attr-defined]
 
     v1 = LimitViolation(
-        code="JOINT_POSITION",
+        error_code="JOINT_POSITION",
         message="joint 0 too high",
         joint_index=0,
-        value=4.0,
-        limit=3.14,
+        requested=4.0,
+        allowed=3.14,
     )
     v2 = LimitViolation(
-        code="SINGULARITY",
+        error_code="SINGULARITY",
         message="near singular",
         joint_index=None,
-        value=1e-7,
-        limit=0.01,
+        requested=1e-7,
+        allowed=0.01,
     )
     exc = LimitsExceeded([v1, v2])
 

@@ -35,10 +35,13 @@ _VALID_CODES: frozenset[str] = frozenset(
     {
         "JOINT_POSITION",
         "JOINT_VELOCITY",
-        "JOINT_ACCELERATION",
-        "SINGULARITY",
+        "JOINT_ACCEL",
         "TCP_VELOCITY",
-        "TCP_ACCELERATION",
+        "TCP_ANGULAR_VELOCITY",
+        "TCP_ACCEL",
+        "SINGULARITY",
+        "RTCP_INVALID",
+        "TCP_INVALID",
     }
 )
 
@@ -55,27 +58,27 @@ class LimitViolation:
     """A single limit violation record.
 
     Args:
-        code: One of the strings in ``_VALID_CODES``.
+        error_code: One of the strings in ``_VALID_CODES``.
         message: Human-readable description of the violation.
         joint_index: Which joint triggered the violation, or ``None`` for
             whole-move violations (singularity, TCP speed, etc.).
         axis: ``None``, ``"linear"``, or ``"angular"`` — discriminates between
             translational and rotational limit types where applicable.
-        value: The actual value that violated the limit (in SI or IR units).
-        limit: The limit value that was exceeded.
+        requested: The actual value that violated the limit (in SI or IR units).
+        allowed: The limit value that was exceeded.
     """
 
-    code: str
+    error_code: str
     message: str
     joint_index: int | None = None
     axis: str | None = None
-    value: float | None = None
-    limit: float | None = None
+    requested: float | None = None
+    allowed: float | None = None
 
     def __post_init__(self) -> None:
-        if self.code not in _VALID_CODES:
+        if self.error_code not in _VALID_CODES:
             raise ValueError(
-                f"LimitViolation.code {self.code!r} is not a recognised code; "
+                f"LimitViolation.error_code {self.error_code!r} is not a recognised code; "
                 f"valid codes: {sorted(_VALID_CODES)}"
             )
         if self.axis not in _VALID_AXES:
@@ -87,12 +90,12 @@ class LimitViolation:
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain dict, including ``None`` values."""
         return {
-            "code": self.code,
+            "error_code": self.error_code,
             "message": self.message,
             "joint_index": self.joint_index,
             "axis": self.axis,
-            "value": self.value,
-            "limit": self.limit,
+            "requested": self.requested,
+            "allowed": self.allowed,
         }
 
 
@@ -150,8 +153,9 @@ def validate_move(
        :class:`~src.motion.ir.JointTarget` is available, compute the
        Yoshikawa index and flag if below ``singularity_threshold``.
 
-    PR-B reserved slots (JOINT_VELOCITY, JOINT_ACCELERATION, TCP_VELOCITY,
-    TCP_ACCELERATION) are present in ``_VALID_CODES`` but not checked here.
+    PR-B reserved slots (JOINT_VELOCITY, JOINT_ACCEL, TCP_VELOCITY,
+    TCP_ANGULAR_VELOCITY, TCP_ACCEL, RTCP_INVALID, TCP_INVALID) are present in
+    ``_VALID_CODES`` but not checked here.
 
     Args:
         move_kind: One of the :class:`~src.motion.ir.MoveKind` string values
@@ -193,7 +197,7 @@ def validate_move(
             if n_move != n_robot:
                 violations.append(
                     LimitViolation(
-                        code="JOINT_POSITION",
+                        error_code="JOINT_POSITION",
                         message=(
                             f"joint count mismatch: move has {n_move} joints, "
                             f"robot expects {n_robot}"
@@ -206,14 +210,14 @@ def validate_move(
                     if q < lo or q > hi:
                         violations.append(
                             LimitViolation(
-                                code="JOINT_POSITION",
+                                error_code="JOINT_POSITION",
                                 message=(
                                     f"joint {i} position {q:.6f} rad out of limits "
                                     f"[{lo:.6f}, {hi:.6f}] rad"
                                 ),
                                 joint_index=i,
-                                value=q,
-                                limit=hi if q > hi else lo,
+                                requested=q,
+                                allowed=hi if q > hi else lo,
                             )
                         )
 
@@ -227,14 +231,14 @@ def validate_move(
             if m < singularity_threshold:
                 violations.append(
                     LimitViolation(
-                        code="SINGULARITY",
+                        error_code="SINGULARITY",
                         message=(
                             f"configuration is near-singular "
                             f"(manipulability={m:.6f} < threshold={singularity_threshold})"
                         ),
                         joint_index=None,
-                        value=m,
-                        limit=singularity_threshold,
+                        requested=m,
+                        allowed=singularity_threshold,
                     )
                 )
         except Exception:

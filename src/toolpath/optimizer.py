@@ -26,7 +26,6 @@ import numpy as np
 
 from src.motion.frames import SE3_from_pose as _SE3_from_pose  # noqa: F401
 from src.motion.ir import PoseTarget
-from src.motion.manipulability import yoshikawa as _yoshikawa  # noqa: F401
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import roboticstoolbox as _rtb  # noqa: F401

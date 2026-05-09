@@ -244,16 +244,14 @@ def test_resolve_frame_to_root_unknown_parent():
 
 
 def test_resolve_frame_to_root_cycle():
-    # Station.__post_init__ does NOT detect cycles (it only checks each frame's
-    # parent exists), so we can construct a cyclic scene via duck-typing and
-    # expect resolve_frame_to_root to catch it.
-    import types
-
+    # Station.__post_init__ checks that every parent name exists but does
+    # not detect cycles, so a real Station with A.parent=B and B.parent=A
+    # constructs cleanly and the cycle is caught by resolve_frame_to_root.
     fA = Frame(name="A", xyz_m=_ZERO_XYZ, quat_wxyz=_ID_QUAT, parent="B")
     fB = Frame(name="B", xyz_m=_ZERO_XYZ, quat_wxyz=_ID_QUAT, parent="A")
-    fake_scene = types.SimpleNamespace(frames=(fA, fB))
+    scene = Station(name="cyclic", frames=(fA, fB))
     with pytest.raises(ValueError, match="cycle"):
-        resolve_frame_to_root(fake_scene, "A")
+        resolve_frame_to_root(scene, "A")
 
 
 def test_optimizer_imports_after_extraction():
