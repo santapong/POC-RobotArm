@@ -9,6 +9,8 @@ import json
 import math
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 
+from src.motion.limits import LimitsExceeded
+
 # Tolerance (metres) under which an IK move is considered successful.
 _SIM_IK_TOL = 0.05
 
@@ -574,5 +576,11 @@ def execute_tool(name: str, arguments: dict) -> str:
         else:
             return json.dumps({"error": f"Unknown tool: {name}"})
 
+    except LimitsExceeded as exc:
+        return _sim_err(
+            "LIMIT_VIOLATION",
+            str(exc),
+            violations=[v.to_dict() for v in exc.violations],
+        )
     except Exception as e:
         return json.dumps({"error": str(e)})

@@ -7,6 +7,7 @@ the public API directly, including the Phase 2 :class:`Recorder` /
 :class:`Player` pair that bolts record/playback on top of the IR.
 """
 
+from .frames import FrameMode
 from .ir import (
     Comment,
     ConfigData,
@@ -30,15 +31,19 @@ from .ir import (
     load,
     to_dict,
 )
+from .limits import LimitsExceeded, LimitViolation, assert_no_violations, validate_move
 from .player import Player
 from .recorder import Recorder
 
 __all__ = [
     "Comment",
     "ConfigData",
+    "FrameMode",
     "IOKind",
     "IOOp",
     "JointTarget",
+    "LimitViolation",
+    "LimitsExceeded",
     "Move",
     "MoveKind",
     "Player",
@@ -53,8 +58,10 @@ __all__ = [
     "Wait",
     "ZoneData",
     "ZoneKind",
+    "assert_no_violations",
     "dump",
     "from_dict",
     "load",
     "to_dict",
+    "validate_move",
 ]

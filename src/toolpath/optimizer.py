@@ -24,38 +24,15 @@ from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
 
+from src.motion.frames import SE3_from_pose as _SE3_from_pose  # noqa: F401
 from src.motion.ir import PoseTarget
+from src.motion.manipulability import yoshikawa as _yoshikawa  # noqa: F401
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import roboticstoolbox as _rtb  # noqa: F401
 
 
 _EPS = 1.0e-9
-
-
-# ---------------------------------------------------------------------------
-# Math helpers
-# ---------------------------------------------------------------------------
-
-
-def _quat_wxyz_to_rotmat(q: Sequence[float]) -> np.ndarray:
-    """Convert a unit-norm wxyz quaternion to a 3x3 rotation matrix."""
-    w, x, y, z = (float(c) for c in q)
-    return np.array(
-        [
-            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-        ],
-        dtype=float,
-    )
-
-
-def _SE3_from_pose(target: PoseTarget) -> Any:
-    """Build a spatialmath SE3 from a PoseTarget (lazy import)."""
-    from spatialmath import SE3
-    R = _quat_wxyz_to_rotmat(target.quat_wxyz)
-    return SE3.Rt(R, np.asarray(target.xyz_m, dtype=float))
 
 
 def _spin_about_local_z(target: PoseTarget, phi: float) -> Any:

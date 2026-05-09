@@ -10,6 +10,7 @@ _robot_registry: dict[str, rtb.Robot] = {}
 def get_panda() -> rtb.Robot:
     """Get a Franka Emika Panda 7-DOF robot."""
     if "panda" not in _robot_registry:
+        # Velocity/accel limits: Franka FCI documentation, joint velocity & acceleration limits
         _robot_registry["panda"] = rtb.models.Panda()
     return _robot_registry["panda"]
 
@@ -17,6 +18,7 @@ def get_panda() -> rtb.Robot:
 def get_ur5() -> rtb.Robot:
     """Get a Universal Robots UR5 6-DOF robot."""
     if "ur5" not in _robot_registry:
+        # Velocity limits: UR5 user manual — 180 deg/s per joint
         _robot_registry["ur5"] = rtb.models.UR5()
     return _robot_registry["ur5"]
 
@@ -37,6 +39,7 @@ def get_abb_irb1200() -> rtb.Robot:
         6     0        0        0.082    0         [-6.981,  6.981]
     """
     if "abb_irb1200" not in _robot_registry:
+        # Velocity limits: ABB IRB 1200-5/0.9 product specification, Maximum axis speed table
         deg = np.pi / 180.0
         links = [
             rtb.RevoluteDH(

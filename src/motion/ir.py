@@ -110,7 +110,9 @@ class ToolData:
 
     The TCP (tool centre point) is expressed in the wrist/flange frame.
     ``mass_kg`` is the tool mass; ``cog_xyz_m`` is its centre of gravity in the
-    flange frame.
+    flange frame. ``robhold`` indicates that the tool is mounted on the robot
+    flange (True) rather than fixed in the world while the robot holds the part
+    (False, i.e. RTCP mode).
     """
 
     name: str
@@ -118,6 +120,7 @@ class ToolData:
     tcp_xyz_m: tuple[float, ...]
     tcp_quat_wxyz: tuple[float, ...]
     cog_xyz_m: tuple[float, ...] = (0.0, 0.0, 0.0)
+    robhold: bool = True
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -130,6 +133,7 @@ class ToolData:
         )
         object.__setattr__(self, "cog_xyz_m", _as_float_tuple(self.cog_xyz_m, 3, "cog_xyz_m"))
         _check_quat(self.tcp_quat_wxyz, "tcp_quat_wxyz")
+        object.__setattr__(self, "robhold", bool(self.robhold))
 
 
 @dataclass(frozen=True)
@@ -170,19 +174,30 @@ class SpeedData:
 
     ``v_tcp_mm_s`` is the headline TCP linear velocity. The other fields cover
     orientation rate and external-axis rates and have sane defaults that mirror
-    common ABB v100/v500 presets.
+    common ABB v100/v500 presets. ``a_tcp_mm_s2`` and ``a_ori_deg_s2`` are
+    optional acceleration caps; ``None`` means unconstrained.
     """
 
     v_tcp_mm_s: float
     v_ori_deg_s: float = 500.0
     v_lin_ext_mm_s: float = 5000.0
     v_rot_ext_deg_s: float = 1000.0
+    a_tcp_mm_s2: float | None = None
+    a_ori_deg_s2: float | None = None
 
     def __post_init__(self) -> None:
         for fname in ("v_tcp_mm_s", "v_ori_deg_s", "v_lin_ext_mm_s", "v_rot_ext_deg_s"):
             v = getattr(self, fname)
             if v <= 0.0:
                 raise ValueError(f"SpeedData.{fname} must be > 0, got {v}")
+        if self.a_tcp_mm_s2 is not None and self.a_tcp_mm_s2 <= 0.0:
+            raise ValueError(
+                f"SpeedData.a_tcp_mm_s2 must be > 0, got {self.a_tcp_mm_s2}"
+            )
+        if self.a_ori_deg_s2 is not None and self.a_ori_deg_s2 <= 0.0:
+            raise ValueError(
+                f"SpeedData.a_ori_deg_s2 must be > 0, got {self.a_ori_deg_s2}"
+            )
 
 
 @dataclass(frozen=True)
