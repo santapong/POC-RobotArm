@@ -15,9 +15,12 @@ union of names.
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Optional
+
+from src.robots.limits import JointLimits
 
 # Resolve the repo root from this file's location: src/robots/catalog.py -> repo/
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
@@ -31,6 +34,7 @@ class RobotURDFSpec:
     dof: int = 0
     home_q: tuple[float, ...] = field(default_factory=tuple)
     description: str = ""
+    limits: JointLimits | None = field(default=None, kw_only=True)
 
 
 CATALOG: dict[str, RobotURDFSpec] = {
@@ -41,6 +45,11 @@ CATALOG: dict[str, RobotURDFSpec] = {
         dof=7,  # 7 arm joints; finger joints are filtered out
         home_q=(0.0, -0.785, 0.0, -2.356, 0.0, 1.571, 0.785),
         description="Franka Emika Panda — 7-DOF research arm.",
+        # Franka Emika Panda — Franka FCI documentation, joint velocity & acceleration limits
+        limits=JointLimits(
+            qd_max_rad_s=(2.1750, 2.1750, 2.1750, 2.1750, 2.6100, 2.6100, 2.6100),
+            qdd_max_rad_s2=(15.0, 7.5, 10.0, 12.5, 15.0, 20.0, 20.0),
+        ),
     ),
     "ur5": RobotURDFSpec(
         name="ur5",
@@ -49,6 +58,11 @@ CATALOG: dict[str, RobotURDFSpec] = {
         dof=6,
         home_q=(0.0, -1.571, 0.0, -1.571, 0.0, 0.0),
         description="Universal Robots UR5 — 6-DOF industrial arm (primitive-shape URDF).",
+        # UR5 user manual — 180 deg/s per joint; UR publishes joint torque, not angular accel
+        limits=JointLimits(
+            qd_max_rad_s=(math.radians(180),) * 6,
+            qdd_max_rad_s2=None,
+        ),
     ),
     "iiwa": RobotURDFSpec(
         name="iiwa",
@@ -57,6 +71,19 @@ CATALOG: dict[str, RobotURDFSpec] = {
         dof=7,
         home_q=(0.0,) * 7,
         description="KUKA LBR iiwa — 7-DOF collaborative arm (default fallback).",
+        # KUKA LBR iiwa 14 R820 specification, axes A1..A7
+        limits=JointLimits(
+            qd_max_rad_s=(
+                math.radians(85),
+                math.radians(85),
+                math.radians(100),
+                math.radians(75),
+                math.radians(130),
+                math.radians(135),
+                math.radians(135),
+            ),
+            qdd_max_rad_s2=None,
+        ),
     ),
     "abb_irb1200": RobotURDFSpec(
         name="abb_irb1200",
@@ -65,6 +92,18 @@ CATALOG: dict[str, RobotURDFSpec] = {
         dof=6,
         home_q=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
         description="ABB IRB 1200-5/0.9 industrial 6-DOF arm (primitive-shape URDF).",
+        # ABB IRB 1200-5/0.9 product specification, Maximum axis speed table
+        limits=JointLimits(
+            qd_max_rad_s=(
+                math.radians(288),
+                math.radians(240),
+                math.radians(297),
+                math.radians(400),
+                math.radians(405),
+                math.radians(600),
+            ),
+            qdd_max_rad_s2=None,
+        ),
     ),
 }
 
