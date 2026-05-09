@@ -172,6 +172,34 @@ def _zone_assign(zone: ZoneData) -> str | None:
     return "$APO.CDIS = " + _fmt_num(zone.radius_mm)
 
 
+def _acc_cp_assign(speed: SpeedData) -> str | None:
+    """Return ``$ACC.CP = <value>`` in m/s², or ``None`` if unset.
+
+    Args:
+        speed: SpeedData from the Move.
+
+    Returns:
+        A KRL ``$ACC.CP = ...`` assignment string, or ``None``.
+    """
+    if speed.a_tcp_mm_s2 is None:
+        return None
+    return "$ACC.CP = " + _fmt_num(speed.a_tcp_mm_s2 / 1000.0)
+
+
+def _acc_ori_assign(speed: SpeedData) -> str | None:
+    """Return ``$ACC.ORI1 = <value>`` in deg/s², or ``None`` if unset.
+
+    Args:
+        speed: SpeedData from the Move.
+
+    Returns:
+        A KRL ``$ACC.ORI1 = ...`` assignment string, or ``None``.
+    """
+    if speed.a_ori_deg_s2 is None:
+        return None
+    return "$ACC.ORI1 = " + _fmt_num(speed.a_ori_deg_s2)
+
+
 # ---------------------------------------------------------------------------
 # Walk: collect target declarations
 # ---------------------------------------------------------------------------
@@ -278,6 +306,21 @@ def _emit_move_lines(
         if state.get("vel_cp") != speed_line:
             lines.append(speed_line)
             state["vel_cp"] = speed_line
+
+    # Acceleration: $ACC.CP and $ACC.ORI1 for LIN/CIRC and MOVE_J(pose).
+    # Emit only when the value changes; apply only for non-pure-joint moves.
+    if move.kind not in (MoveKind.MOVE_ABS_J,) and not (
+        move.kind == MoveKind.MOVE_J and isinstance(move.target, JointTarget)
+    ):
+        acc_cp = _acc_cp_assign(move.speed)
+        if acc_cp is not None and state.get("acc_cp") != acc_cp:
+            lines.append(acc_cp)
+            state["acc_cp"] = acc_cp
+
+        acc_ori = _acc_ori_assign(move.speed)
+        if acc_ori is not None and state.get("acc_ori") != acc_ori:
+            lines.append(acc_ori)
+            state["acc_ori"] = acc_ori
 
     # Zone: $APO.CDIS for RADIUS, nothing for FINE. We track the last seen
     # value so successive equal blends don't re-emit.
