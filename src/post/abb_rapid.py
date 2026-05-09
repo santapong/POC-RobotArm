@@ -211,8 +211,11 @@ def _emit_move(
     zone_name: str,
 ) -> str:
     tool = move.tool.name
-    wobj = move.wobj.name
-    suffix = f"\\WObj:={wobj}" if wobj != "wobj0" else ""
+    # Always emit the \WObj clause. Earlier the suffix was elided when the
+    # wobj name happened to be "wobj0", but the IR allows any name including
+    # "wobj0" attached to a non-identity frame, in which case eliding the
+    # clause would silently run motion in the wrong frame on the controller.
+    suffix = f"\\WObj:={move.wobj.name}"
     if move.kind == MoveKind.MOVE_J:
         return f"MoveJ {target_name}, {speed_name}, {zone_name}, {tool}{suffix};"
     if move.kind == MoveKind.MOVE_L:

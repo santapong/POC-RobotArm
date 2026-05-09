@@ -178,11 +178,13 @@ def _hello_program(tool, wobj) -> Program:
 def test_movej_uses_predefined_speed_and_zone(gripper, wobj0):
     prog = _hello_program(gripper, wobj0)
     src = RAPIDPost().emit(prog)
-    # Predefined v200 + z10 reused; tool wins; wobj0 omitted (default)
+    # Predefined v200 + z10 reused; tool wins; \WObj is always emitted (even
+    # for wobj0) so a non-identity wobj that happens to be named "wobj0"
+    # cannot silently fall back to the world frame.
     # j1 is the absolute joint home target emitted first.
-    assert "MoveAbsJ j1, v200, fine, tGripper" in src
-    assert "MoveJ p1, v200, z10, tGripper" in src
-    assert "MoveL p2, v100, fine, tGripper" in src
+    assert "MoveAbsJ j1, v200, fine, tGripper\\WObj:=wobj0" in src
+    assert "MoveJ p1, v200, z10, tGripper\\WObj:=wobj0" in src
+    assert "MoveL p2, v100, fine, tGripper\\WObj:=wobj0" in src
 
 
 def test_movec_emits_via_then_target(gripper, wobj0):
@@ -340,8 +342,8 @@ MODULE Hello
   CONST jointtarget j1 := [[0, 0, 0, 0, 0, 0], [9E9, 9E9, 9E9, 9E9, 9E9, 9E9]];
 
   PROC main()
-    MoveAbsJ j1, v200, fine, tGripper;
-    MoveL p1, v100, z10, tGripper;
+    MoveAbsJ j1, v200, fine, tGripper\\WObj:=wobj0;
+    MoveL p1, v100, z10, tGripper\\WObj:=wobj0;
   ENDPROC
 
 ENDMODULE
@@ -364,3 +366,35 @@ def test_golden_hello_program(gripper, wobj0):
         ],
     )
     assert RAPIDPost().emit(prog) == GOLDEN_HELLO
+
+
+# ---------------------------------------------------------------------------
+# Regression: \WObj clause is emitted for every wobj including "wobj0"
+# (audit must-fix #2). Earlier the suffix was elided whenever the wobj
+# *name* equaled "wobj0", so a non-identity wobj that happened to share
+# that name silently fell back to the world frame on the controller.
+# ---------------------------------------------------------------------------
+
+
+def test_wobj_clause_always_emitted_even_for_named_wobj0(gripper):
+    """A user-defined non-identity wobj named 'wobj0' must keep its \\WObj clause."""
+    sneaky = WObjData(
+        name="wobj0",                              # collides with predefined name
+        base_xyz_m=(0.5, 0.0, 0.0),                # but is NOT the identity frame
+        base_quat_wxyz=(1.0, 0.0, 0.0, 0.0),
+    )
+    pose = PoseTarget((0.4, 0.0, 0.3), (1.0, 0.0, 0.0, 0.0))
+    prog = Program(
+        name="P",
+        tools=[gripper],
+        wobjs=[sneaky],
+        procedures=[Procedure("main", body=[
+            Move(MoveKind.MOVE_L, pose, SpeedData(100.0),
+                 ZoneData.fine(), gripper, sneaky),
+        ])],
+    )
+    src = RAPIDPost().emit(prog)
+    # Must include the explicit \WObj clause; without the fix this regressed
+    # to "MoveL p1, v100, fine, tGripper;" which silently runs in world frame.
+    assert "\\WObj:=wobj0" in src
+    assert "MoveL p1, v100, fine, tGripper\\WObj:=wobj0;" in src
