@@ -69,11 +69,9 @@ def test_trapezoidal_profile_zero_distance():
     assert _trapezoidal_profile(distance=0.0, v_max=1.0, a_max=1.0, dt_s=0.01) == (0.0,)
 
 
-def test_trapezoidal_profile_negative_distance_returns_zero_tuple_DEVIATION():
-    # Architect spec: distance < 0 should raise ValueError.
-    # Implementation: the `if distance <= 0.0` branch returns (0.0,) silently.
-    # This test pins the *current* behaviour; reviewer should triage which one wins.
-    assert _trapezoidal_profile(distance=-0.5, v_max=1.0, a_max=1.0, dt_s=0.01) == (0.0,)
+def test_trapezoidal_profile_rejects_negative_distance():
+    with pytest.raises(ValueError, match="distance must be >= 0"):
+        _trapezoidal_profile(distance=-0.5, v_max=1.0, a_max=1.0, dt_s=0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -228,15 +226,91 @@ def test_sampled_path_carries_violations():
 
 
 # ---------------------------------------------------------------------------
-# Documented spec-vs-impl deviations (for reviewer triage)
+# Validation post PR-B reviewer must-fixes
 # ---------------------------------------------------------------------------
-# 1. _trapezoidal_profile: architect specced ValueError for distance < 0;
-#    impl returns (0.0,). See test_trapezoidal_profile_negative_distance_*.
-# 2. Sample.__post_init__: architect specced ValueError for t_s < 0,
-#    len(flange_xyz_m) != 3, len(flange_quat_wxyz) != 4, plus a check_quat
-#    call. Impl coerces only — no validation.
-# 3. SampledPath.__post_init__: architect specced ValueError on dt_s <= 0
-#    and non-monotonic move_boundaries. Impl coerces only — no validation.
-# 4. _arc_fit_3pt: architect specced piecewise SLERP through q_via; impl
-#    slerps directly q0 -> q1, ignoring q_via. (Tests above only check
-#    position; orientation through the via is not asserted.)
+
+
+def test_sample_rejects_negative_t_s():
+    with pytest.raises(ValueError, match="t_s must be >= 0"):
+        Sample(
+            t_s=-0.001,
+            q_rad=(0.0,),
+            flange_xyz_m=(0.0, 0.0, 0.0),
+            flange_quat_wxyz=(1.0, 0.0, 0.0, 0.0),
+        )
+
+
+def test_sample_rejects_wrong_xyz_length():
+    with pytest.raises(ValueError, match="flange_xyz_m must have 3"):
+        Sample(
+            t_s=0.0,
+            q_rad=(0.0,),
+            flange_xyz_m=(0.0, 0.0),  # only 2 components
+            flange_quat_wxyz=(1.0, 0.0, 0.0, 0.0),
+        )
+
+
+def test_sample_rejects_wrong_quat_length():
+    with pytest.raises(ValueError, match="flange_quat_wxyz must have 4"):
+        Sample(
+            t_s=0.0,
+            q_rad=(0.0,),
+            flange_xyz_m=(0.0, 0.0, 0.0),
+            flange_quat_wxyz=(1.0, 0.0, 0.0),  # only 3 components
+        )
+
+
+def test_sample_rejects_non_unit_quat():
+    with pytest.raises(ValueError, match="unit-norm"):
+        Sample(
+            t_s=0.0,
+            q_rad=(0.0,),
+            flange_xyz_m=(0.0, 0.0, 0.0),
+            flange_quat_wxyz=(2.0, 0.0, 0.0, 0.0),  # non-unit
+        )
+
+
+def test_sampled_path_rejects_nonpositive_dt_s():
+    s = Sample(0.0, (0.0,), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match="dt_s must be > 0"):
+        SampledPath(
+            robot_name="panda",
+            dt_s=0.0,
+            samples=(s,),
+            move_boundaries=(0,),
+        )
+
+
+def test_sampled_path_rejects_non_monotonic_boundaries():
+    s = Sample(0.0, (0.0,), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match="monotonic non-decreasing"):
+        SampledPath(
+            robot_name="panda",
+            dt_s=0.01,
+            samples=(s,) * 5,
+            move_boundaries=(0, 3, 1),  # 1 < 3 violates monotonicity
+        )
+
+
+# ---------------------------------------------------------------------------
+# _arc_fit_3pt orientation through q_via (MF4)
+# ---------------------------------------------------------------------------
+
+
+def test_arc_fit_3pt_orientation_passes_through_q_via():
+    # Construct an arc whose via-fraction is exactly 0.5 (symmetric three
+    # points), so the curve at s=0.5 should be at q_via.
+    p0 = (0.0, 0.0, 0.0)
+    p_via = (0.5, 0.5, 0.0)  # equidistant in angle on the circumscribed circle
+    p1 = (1.0, 0.0, 0.0)
+    q0 = (1.0, 0.0, 0.0, 0.0)
+    # 90-deg rotation about z = (cos(45), 0, 0, sin(45))
+    q_via = (math.cos(math.pi / 4), 0.0, 0.0, math.sin(math.pi / 4))
+    q1 = (math.cos(math.pi / 2), 0.0, 0.0, math.sin(math.pi / 2))
+    curve_fn, _ = _arc_fit_3pt(p0, p_via, p1, q0, q_via, q1)
+    # The geometric via fraction for these three points happens to be 0.5
+    # (the via and target are at equal angles from p0). Sample at s=0.5 and
+    # confirm orientation matches q_via within numerical tolerance.
+    _, quat_mid = curve_fn(0.5)
+    for got, want in zip(quat_mid, q_via):
+        assert got == pytest.approx(want, abs=1e-6)

@@ -29,6 +29,7 @@ from src.motion.ir import (
     MoveKind,
     PoseTarget,
     Program,
+    check_quat,
 )
 from src.motion.limits import LimitViolation, assert_no_violations
 from src.motion.manipulability import is_singular
@@ -67,23 +68,37 @@ class Sample:
     flags: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
+        if float(self.t_s) < 0.0:
+            raise ValueError(f"Sample.t_s must be >= 0, got {self.t_s}")
+        xyz_seq = tuple(self.flange_xyz_m)
+        if len(xyz_seq) != 3:
+            raise ValueError(
+                f"Sample.flange_xyz_m must have 3 components (x, y, z), got {len(xyz_seq)}"
+            )
+        quat_seq = tuple(self.flange_quat_wxyz)
+        if len(quat_seq) != 4:
+            raise ValueError(
+                f"Sample.flange_quat_wxyz must have 4 components (w, x, y, z), "
+                f"got {len(quat_seq)}"
+            )
         object.__setattr__(self, "q_rad", tuple(float(v) for v in self.q_rad))
         object.__setattr__(
             self,
             "flange_xyz_m",
-            (float(self.flange_xyz_m[0]), float(self.flange_xyz_m[1]), float(self.flange_xyz_m[2])),
+            (float(xyz_seq[0]), float(xyz_seq[1]), float(xyz_seq[2])),
         )
         object.__setattr__(
             self,
             "flange_quat_wxyz",
             (
-                float(self.flange_quat_wxyz[0]),
-                float(self.flange_quat_wxyz[1]),
-                float(self.flange_quat_wxyz[2]),
-                float(self.flange_quat_wxyz[3]),
+                float(quat_seq[0]),
+                float(quat_seq[1]),
+                float(quat_seq[2]),
+                float(quat_seq[3]),
             ),
         )
         object.__setattr__(self, "flags", frozenset(self.flags))
+        check_quat(self.flange_quat_wxyz, "Sample.flange_quat_wxyz")
 
 
 @dataclass(frozen=True)
@@ -111,9 +126,17 @@ class SampledPath:
     violations: tuple[LimitViolation, ...] = ()
 
     def __post_init__(self) -> None:
+        if float(self.dt_s) <= 0.0:
+            raise ValueError(f"SampledPath.dt_s must be > 0, got {self.dt_s}")
         object.__setattr__(self, "samples", tuple(self.samples))
         object.__setattr__(self, "move_boundaries", tuple(self.move_boundaries))
         object.__setattr__(self, "violations", tuple(self.violations))
+        for prev, nxt in zip(self.move_boundaries, self.move_boundaries[1:]):
+            if nxt < prev:
+                raise ValueError(
+                    f"SampledPath.move_boundaries must be monotonic non-decreasing, "
+                    f"got ..., {prev}, {nxt}, ..."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +168,9 @@ def _trapezoidal_profile(
     Returns:
         Tuple of arc-length samples from 0 to ``distance``.
     """
-    if distance <= 0.0:
+    if distance < 0.0:
+        raise ValueError(f"_trapezoidal_profile: distance must be >= 0, got {distance}")
+    if distance == 0.0:
         return (0.0,)
 
     if a_max is None:
@@ -250,6 +275,28 @@ def _slerp_quat(
     return (w, x, y, z)
 
 
+def _slerp_via(
+    q0: tuple[float, float, float, float],
+    q_via: tuple[float, float, float, float],
+    q1: tuple[float, float, float, float],
+    s: float,
+    via_frac: float,
+) -> tuple[float, float, float, float]:
+    """Piecewise SLERP from q0 through q_via to q1.
+
+    For s in [0, via_frac] interpolate q0 -> q_via; for s in (via_frac, 1]
+    interpolate q_via -> q1. Used by ``_arc_fit_3pt`` so MOVE_C orientations
+    actually pass through the via-point quaternion at its parametric arc
+    fraction, matching ABB / KUKA / UR vendor semantics.
+    """
+    if s <= via_frac:
+        local = s / via_frac if via_frac > 0.0 else 0.0
+        return _slerp_quat(q0, q_via, local)
+    span = 1.0 - via_frac
+    local = (s - via_frac) / span if span > 0.0 else 1.0
+    return _slerp_quat(q_via, q1, local)
+
+
 # ---------------------------------------------------------------------------
 # Arc fit for MOVE_C
 # ---------------------------------------------------------------------------
@@ -289,12 +336,18 @@ def _arc_fit_3pt(
     cross_norm = float(np.linalg.norm(cross))
 
     if cross_norm < 1e-12:
-        # Collinear: fall back to straight-line interpolation.
+        # Collinear: fall back to straight-line interpolation. Orientation
+        # passes through q_via at the projected via fraction along the line.
         d_lin = float(np.linalg.norm(v2 - v0))
+        if d_lin > 1e-12:
+            via_frac = float(np.dot(v1 - v0, v2 - v0) / max(d_lin * d_lin, 1e-24))
+            via_frac = min(1.0 - 1e-9, max(1e-9, via_frac))
+        else:
+            via_frac = 0.5
 
         def _linear(s: float) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
             xyz = tuple(float(v) for v in (v0 + s * (v2 - v0)))
-            quat = _slerp_quat(q0, q1, s)
+            quat = _slerp_via(q0, q_via, q1, s, via_frac)
             return (xyz[0], xyz[1], xyz[2]), quat  # type: ignore[return-value]
 
         return _linear, max(d_lin, 1e-9)
@@ -311,10 +364,15 @@ def _arc_fit_3pt(
     denom = 2.0 * (aa * bb - ab * ab)
     if abs(denom) < 1e-24:
         d_lin = float(np.linalg.norm(v2 - v0))
+        if d_lin > 1e-12:
+            via_frac = float(np.dot(v1 - v0, v2 - v0) / max(d_lin * d_lin, 1e-24))
+            via_frac = min(1.0 - 1e-9, max(1e-9, via_frac))
+        else:
+            via_frac = 0.5
 
         def _linear2(s: float) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
             xyz = tuple(float(v) for v in (v0 + s * (v2 - v0)))
-            quat = _slerp_quat(q0, q1, s)
+            quat = _slerp_via(q0, q_via, q1, s, via_frac)
             return (xyz[0], xyz[1], xyz[2]), quat  # type: ignore[return-value]
 
         return _linear2, max(d_lin, 1e-9)
@@ -343,6 +401,14 @@ def _arc_fit_3pt(
         arc_length = float(np.linalg.norm(v2 - v0))
         arc_length = max(arc_length, 1e-9)
 
+    # Fraction of the parametric arc length at which the curve passes through
+    # p_via — drives the piecewise SLERP transition for orientation.
+    if abs(theta_end) > 1e-12:
+        via_frac = float(theta_via / theta_end)
+        via_frac = min(1.0 - 1e-9, max(1e-9, via_frac))
+    else:
+        via_frac = 0.5
+
     def _curve(s: float) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
         theta = s * theta_end
         # Rodrigues rotation of r0 by theta about n.
@@ -350,7 +416,7 @@ def _arc_fit_3pt(
         sin_t = math.sin(theta)
         r = cos_t * r0 + sin_t * np.cross(n, r0) + (1.0 - cos_t) * float(np.dot(n, r0)) * n
         xyz = centre + r
-        quat = _slerp_quat(q0, q1, s)
+        quat = _slerp_via(q0, q_via, q1, s, via_frac)
         return (float(xyz[0]), float(xyz[1]), float(xyz[2])), quat
 
     return _curve, arc_length
@@ -527,26 +593,29 @@ def _check_limits_for_samples(
                     )
                 )
 
-    # SINGULARITY — check all samples.
+    # SINGULARITY — check all samples. Catch only the numerical-failure
+    # exception types we expect from rtb / numpy; let real bugs (AttributeError,
+    # TypeError, etc.) propagate so they surface in tests rather than being
+    # silently dropped.
     for k, s in enumerate(updated):
         q_k = np.array(s.q_rad, dtype=float)
         try:
             J = robot.jacob0(q_k)
-            if is_singular(J, threshold=0.01):
-                violations.append(
-                    LimitViolation(
-                        error_code="SINGULARITY",
-                        message=(
-                            f"near-singular configuration at t={s.t_s:.4f}s "
-                            f"(sample index {k})"
-                        ),
-                        joint_index=None,
-                    )
+        except (ValueError, np.linalg.LinAlgError):
+            continue
+        if is_singular(J, threshold=0.01):
+            violations.append(
+                LimitViolation(
+                    error_code="SINGULARITY",
+                    message=(
+                        f"near-singular configuration at t={s.t_s:.4f}s "
+                        f"(sample index {k})"
+                    ),
+                    joint_index=None,
                 )
-                # Tag the sample.
-                updated[k] = dataclasses.replace(s, flags=s.flags | {"SINGULAR_NEAR"})
-        except Exception:
-            pass
+            )
+            # Tag the sample.
+            updated[k] = dataclasses.replace(s, flags=s.flags | {"SINGULAR_NEAR"})
 
     return updated, violations
 
