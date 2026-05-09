@@ -445,6 +445,20 @@ def test_move_linear_validates_arguments():
         drv.move_linear(xyz_m=[0.0, 0.1, 0.2], quat_wxyz=[1.0, 0.0, 0.0], wait=False)
 
 
+def test_move_linear_rejects_non_unit_quaternion():
+    """Audit must-fix #3: silent orientation scaling on a real ABB controller
+    is prevented by validating unit-norm at the driver entry point.
+    """
+    session = _build_session()
+    drv = RWSDriver(host="x", session=session)
+    with pytest.raises(ValueError, match="unit-norm"):
+        drv.move_linear(
+            xyz_m=[0.4, 0.0, 0.5],
+            quat_wxyz=[0.9, 0.1, 0.2, 0.3],   # norm ~0.987, NOT unit
+            wait=False,
+        )
+
+
 # ---------------------------------------------------------------------------
 # stop / error mapping
 # ---------------------------------------------------------------------------

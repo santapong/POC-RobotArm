@@ -431,11 +431,12 @@ class RWSDriver:
             raise ValueError(
                 f"move_linear expected 3 xyz components, got {len(position)}"
             )
-        quat = [float(v) for v in quat_wxyz]
-        if len(quat) != 4:
-            raise ValueError(
-                f"move_linear expected 4-element wxyz quaternion, got {len(quat)}"
-            )
+        quat = tuple(float(v) for v in quat_wxyz)
+        # check_quat enforces both length and unit-norm; protects the real
+        # controller from receiving a non-unit quaternion that would be
+        # silently re-normalized or trigger a Math error mid-motion.
+        from src.motion.ir import check_quat
+        check_quat(quat, "quat_wxyz")
         # Convert SpeedData speed: speed_m_s -> mm/s for RAPID.
         speed_mm_s = max(speed_m_s * 1000.0, 1.0)
         program = self._oneshot_program(

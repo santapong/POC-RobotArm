@@ -44,7 +44,14 @@ def _as_float_tuple(value: Any, length: Optional[int] = None, name: str = "value
     return out
 
 
-def _check_quat(quat: tuple[float, ...], name: str) -> None:
+def check_quat(quat: tuple[float, ...], name: str = "quaternion") -> None:
+    """Validate ``quat`` is a 4-element unit-norm wxyz quaternion.
+
+    Raises :class:`ValueError` with ``name`` interpolated into the message if
+    the length is wrong or the norm differs from 1 by more than
+    :data:`QUAT_NORM_TOL`. Public so driver / IR call-sites at the boundary
+    can enforce the same invariant the IR enforces internally.
+    """
     if len(quat) != 4:
         raise ValueError(f"{name} must have 4 components (w, x, y, z), got {len(quat)}")
     norm = math.sqrt(sum(c * c for c in quat))
@@ -52,6 +59,10 @@ def _check_quat(quat: tuple[float, ...], name: str) -> None:
         raise ValueError(
             f"{name} must be unit-norm within {QUAT_NORM_TOL}; |q|={norm:.9f}"
         )
+
+
+# Backwards-compatible alias for code paths that imported the private name.
+_check_quat = check_quat
 
 
 # ---------------------------------------------------------------------------
@@ -533,12 +544,14 @@ __all__ = [
     "Procedure",
     "ProcedureStep",
     "Program",
+    "QUAT_NORM_TOL",
     "SpeedData",
     "ToolData",
     "WObjData",
     "Wait",
     "ZoneData",
     "ZoneKind",
+    "check_quat",
     "dump",
     "from_dict",
     "load",

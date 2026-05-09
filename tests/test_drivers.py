@@ -220,10 +220,12 @@ def test_move_joint_accepts_speed_and_blend_args(fake_bridge: MagicMock):
 
 def test_move_linear_passes_position_and_quat_to_ik(fake_bridge: MagicMock):
     drv = SimDriver(fake_bridge, robot_name="panda", dof=6)
-    # Canonical wxyz quaternion; the driver must reorder to PyBullet's xyzw.
+    # Canonical wxyz unit quaternion (90deg rotation about Y); the driver
+    # must reorder to PyBullet's xyzw and validate unit-norm at the boundary.
+    s = 0.7071068
     drv.move_linear(
         xyz_m=[0.4, 0.0, 0.5],
-        quat_wxyz=[0.9239, 0.1, 0.2, 0.3],
+        quat_wxyz=[s, 0.0, s, 0.0],
         wait=False,
     )
 
@@ -231,7 +233,7 @@ def test_move_linear_passes_position_and_quat_to_ik(fake_bridge: MagicMock):
     assert len(sim.ik_calls) == 1
     pos, orn = sim.ik_calls[0]
     assert pos == [0.4, 0.0, 0.5]
-    assert orn == [0.1, 0.2, 0.3, 0.9239]  # xyzw
+    assert orn == [0.0, s, 0.0, s]  # xyzw
 
 
 def test_run_program_raises_not_implemented(driver: SimDriver):
@@ -242,3 +244,30 @@ def test_run_program_raises_not_implemented(driver: SimDriver):
 def test_stop_cancels_trajectory(driver: SimDriver, fake_bridge: MagicMock):
     driver.stop()
     fake_bridge.cancel_trajectory.assert_called_once_with()
+
+
+# ---------------------------------------------------------------------------
+# Regression: move_linear validates unit-norm quaternion (audit must-fix #3).
+# Earlier the driver only checked length, so a non-unit quaternion silently
+# scaled the orientation when reordered into PyBullet's xyzw form.
+# ---------------------------------------------------------------------------
+
+
+def test_move_linear_rejects_non_unit_quaternion(fake_bridge: MagicMock):
+    drv = SimDriver(fake_bridge, robot_name="panda", dof=6)
+    with pytest.raises(ValueError, match="unit-norm"):
+        drv.move_linear(
+            xyz_m=[0.4, 0.0, 0.5],
+            quat_wxyz=[0.9, 0.1, 0.2, 0.3],     # norm ~0.987, NOT unit
+            wait=False,
+        )
+
+
+def test_move_linear_rejects_wrong_length_quaternion(fake_bridge: MagicMock):
+    drv = SimDriver(fake_bridge, robot_name="panda", dof=6)
+    with pytest.raises(ValueError, match="4 components"):
+        drv.move_linear(
+            xyz_m=[0.4, 0.0, 0.5],
+            quat_wxyz=[1.0, 0.0, 0.0],          # only 3 components
+            wait=False,
+        )

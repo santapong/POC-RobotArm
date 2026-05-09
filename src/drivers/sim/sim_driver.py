@@ -28,6 +28,7 @@ import warnings
 from typing import TYPE_CHECKING, Sequence
 
 from src.drivers.base import RobotState
+from src.motion.ir import check_quat
 
 if TYPE_CHECKING:  # pragma: no cover - import only for typing
     from src.simulation.bridge import SimBridge
@@ -141,11 +142,11 @@ class SimDriver:
 
         target_xyzw = None
         if quat_wxyz is not None:
-            quat = [float(v) for v in quat_wxyz]
-            if len(quat) != 4:
-                raise ValueError(
-                    f"move_linear expected 4-element quaternion, got {len(quat)}"
-                )
+            quat = tuple(float(v) for v in quat_wxyz)
+            # check_quat enforces both length and unit-norm; matches the
+            # invariant the IR's PoseTarget enforces internally so a bad quat
+            # cannot reach PyBullet's IK and silently scale the orientation.
+            check_quat(quat, "quat_wxyz")
             # Canonical wxyz -> PyBullet's xyzw.
             w, x, y, z = quat
             target_xyzw = [x, y, z, w]
