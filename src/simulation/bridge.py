@@ -122,7 +122,18 @@ class SimBridge:
     # ------------------------------------------------------------- GUI tick
 
     def tick(self, max_commands: int = 32) -> int:
-        """Called from the GUI/main thread on every loop iteration."""
+        """Called from the GUI/main thread on every loop iteration.
+
+        If the underlying ``RobotArmSim`` has dropped its PyBullet connection
+        (window closed, segfault, etc.), the bridge self-shuts-down so the
+        next ``_sim_bridge()`` lookup correctly returns ``None`` and the user
+        can re-initialise without restarting the process.
+        """
+        if not self.sim.is_connected():
+            self.cancel_trajectory()
+            type(self).shutdown()
+            return 0
+
         n = 0
         while n < max_commands:
             try:

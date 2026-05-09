@@ -425,3 +425,72 @@ def test_golden_hello_program(gripper, wobj0):
         ])],
     )
     assert URScriptPost().emit(prog) == GOLDEN_HELLO
+
+
+# ---------------------------------------------------------------------------
+# Per-move accel emission (PR-B)
+# ---------------------------------------------------------------------------
+
+
+def _ur_accel_program(
+    move_kind: MoveKind,
+    speed: SpeedData,
+    gripper: ToolData,
+    wobj0: WObjData,
+) -> Program:
+    if move_kind == MoveKind.MOVE_ABS_J:
+        target = JointTarget(q_rad=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    else:
+        target = PoseTarget((0.4, 0.0, 0.3), (1.0, 0.0, 0.0, 0.0))
+    return Program(
+        name="P",
+        tools=[gripper],
+        wobjs=[wobj0],
+        procedures=[
+            Procedure("main", body=[
+                Move(move_kind, target, speed, ZoneData.fine(), gripper, wobj0),
+            ]),
+        ],
+    )
+
+
+def test_ur_movel_passes_a_tcp_when_set(gripper, wobj0):
+    speed = SpeedData(v_tcp_mm_s=500.0, a_tcp_mm_s2=2000.0)  # 2.0 m/s²
+    prog = _ur_accel_program(MoveKind.MOVE_L, speed, gripper, wobj0)
+    src = URScriptPost().emit(prog)
+    # _fmt_num normalises floats; 2.0 m/s² -> "2".
+    assert "movel(" in src
+    assert "a=2," in src
+
+
+def test_ur_movel_uses_default_accel_when_unset(gripper, wobj0):
+    speed = SpeedData(v_tcp_mm_s=500.0)
+    prog = _ur_accel_program(MoveKind.MOVE_L, speed, gripper, wobj0)
+    src = URScriptPost().emit(prog)
+    # DEFAULT_ACCEL_LIN = 1.2 m/s².
+    assert "a=1.2," in src
+
+
+def test_ur_movej_uses_a_ori_radians_when_set(gripper, wobj0):
+    # 90.0 deg/s² = pi/2 rad/s² ≈ 1.570796 — _fmt_num prints to ~6 decimals.
+    speed = SpeedData(v_tcp_mm_s=500.0, a_ori_deg_s2=90.0)
+    prog = _ur_accel_program(MoveKind.MOVE_ABS_J, speed, gripper, wobj0)
+    src = URScriptPost().emit(prog)
+    assert "movej(" in src
+    # The accel arg should be present and approximate pi/2.
+    expected = math.radians(90.0)
+    # Look for the line containing movej and verify accel value within 1e-4.
+    movej_line = next(line for line in src.splitlines() if "movej(" in line)
+    # Extract `a=<num>` from the line. Place `-` at the end of the character
+    # class so it's literal, not a range operator.
+    m = re.search(r"a=([0-9.eE+-]+)", movej_line)
+    assert m is not None
+    assert float(m.group(1)) == pytest.approx(expected, abs=1e-4)
+
+
+def test_ur_movej_uses_default_accel_when_a_ori_unset(gripper, wobj0):
+    speed = SpeedData(v_tcp_mm_s=500.0)
+    prog = _ur_accel_program(MoveKind.MOVE_ABS_J, speed, gripper, wobj0)
+    src = URScriptPost().emit(prog)
+    # DEFAULT_ACCEL_J = 1.4 rad/s².
+    assert "a=1.4," in src

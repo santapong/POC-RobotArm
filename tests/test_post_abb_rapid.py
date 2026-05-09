@@ -398,3 +398,50 @@ def test_wobj_clause_always_emitted_even_for_named_wobj0(gripper):
     # to "MoveL p1, v100, fine, tGripper;" which silently runs in world frame.
     assert "\\WObj:=wobj0" in src
     assert "MoveL p1, v100, fine, tGripper\\WObj:=wobj0;" in src
+
+
+# ---------------------------------------------------------------------------
+# AccSet emission (PR-B)
+# ---------------------------------------------------------------------------
+
+
+def _accel_program(speed: SpeedData, gripper: ToolData, wobj0: WObjData) -> Program:
+    pose = PoseTarget((0.4, 0.0, 0.3), (1.0, 0.0, 0.0, 0.0))
+    return Program(
+        name="P",
+        tools=[gripper],
+        wobjs=[wobj0],
+        procedures=[
+            Procedure("main", body=[
+                Move(MoveKind.MOVE_L, pose, speed, ZoneData.fine(), gripper, wobj0),
+            ]),
+        ],
+    )
+
+
+def test_accset_emitted_when_a_tcp_set(gripper, wobj0):
+    speed = SpeedData(v_tcp_mm_s=500.0, a_tcp_mm_s2=2500.0)
+    prog = _accel_program(speed, gripper, wobj0)
+    src = RAPIDPost().emit(prog)
+    # 2500 mm/s² is 50% of the 5000 mm/s² RAPID default, so AccSet should
+    # land at 50.0%.
+    assert "AccSet 50.0, 100;" in src
+    # AccSet must precede the MoveL it applies to.
+    accset_pos = src.index("AccSet 50.0, 100;")
+    move_pos = src.index("MoveL p1, ")
+    assert accset_pos < move_pos
+
+
+def test_accset_not_emitted_when_a_tcp_unset(gripper, wobj0):
+    speed = SpeedData(v_tcp_mm_s=500.0)  # accel fields default to None
+    prog = _accel_program(speed, gripper, wobj0)
+    src = RAPIDPost().emit(prog)
+    assert "AccSet" not in src
+
+
+def test_accset_clamps_to_100_percent(gripper, wobj0):
+    speed = SpeedData(v_tcp_mm_s=500.0, a_tcp_mm_s2=1.0e9)
+    prog = _accel_program(speed, gripper, wobj0)
+    src = RAPIDPost().emit(prog)
+    # Implementation: max(1, min(100, round(a_tcp / 5000 * 100))).
+    assert "AccSet 100.0, 100;" in src

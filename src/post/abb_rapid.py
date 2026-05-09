@@ -17,6 +17,14 @@ PROC body stays compact and human-readable. Predefined RAPID names
 (``fine``, ``z10``, ``v100``, ...) are reused when the IR values match;
 otherwise a custom declaration is generated.
 
+Acceleration handling:
+    RAPID ``speeddata`` has no acceleration slot. The canonical lever is the
+    ``AccSet acc, ramp`` instruction, which sets TCP acceleration as a
+    percentage of the controller default (5000 mm/s²). When
+    :attr:`~src.motion.ir.SpeedData.a_tcp_mm_s2` is set on a Move, the emitter
+    inserts an ``AccSet`` instruction immediately before the move line whenever
+    the acceleration value changes from the last emitted one.
+
 Reference: ABB RAPID Technical Reference Manual (3HAC16581-1).
 """
 
@@ -200,6 +208,30 @@ def _decl_jointtarget(name: str, t: JointTarget) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Acceleration helper
+# ---------------------------------------------------------------------------
+
+
+def _accset_line(speed: SpeedData) -> str | None:
+    """Return an ``AccSet acc%, 100;`` line or ``None`` if ``a_tcp_mm_s2`` is unset.
+
+    The RAPID ``AccSet`` instruction sets TCP acceleration as a percentage of the
+    controller default (5000 mm/s²). The ramp percentage is always 100 (full ramp).
+
+    Args:
+        speed: SpeedData from the Move.
+
+    Returns:
+        A RAPID ``AccSet acc, 100;`` string, or ``None``.
+    """
+    if speed.a_tcp_mm_s2 is None:
+        return None
+    acc_pct = max(1, min(100, round(speed.a_tcp_mm_s2 / 5000.0 * 100.0)))
+    ramp_pct = 100
+    return f"AccSet {acc_pct:.1f}, {ramp_pct};"
+
+
+# ---------------------------------------------------------------------------
 # Move / IO / Wait / Comment emitters
 # ---------------------------------------------------------------------------
 
@@ -290,10 +322,19 @@ class _Decls:
 def _walk_procedure(proc: Procedure, decls: _Decls) -> list[str]:
     """Emit the body lines for one procedure; mutate ``decls`` with new targets."""
     lines: list[str] = []
+    # Track last-emitted a_tcp_mm_s2 value so we only inject AccSet on change.
+    state: dict = {}
     for step in proc.body:
         if isinstance(step, Move):
             speed_name = _speed_name(step.speed, decls.custom_speed_zone)
             zone_name = _zone_name(step.zone, decls.custom_speed_zone)
+
+            # Inject AccSet when acceleration changes.
+            accset = _accset_line(step.speed)
+            if accset is not None and state.get("a_tcp_mm_s2") != step.speed.a_tcp_mm_s2:
+                lines.append(accset)
+                state["a_tcp_mm_s2"] = step.speed.a_tcp_mm_s2
+
             if step.kind == MoveKind.MOVE_C:
                 assert step.circ_via is not None  # validated by IR
                 via = decls.name_pose(step.circ_via)

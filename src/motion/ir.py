@@ -61,6 +61,20 @@ def check_quat(quat: tuple[float, ...], name: str = "quaternion") -> None:
         )
 
 
+def canonicalise_quat(quat: tuple[float, ...]) -> tuple[float, float, float, float]:
+    """Return ``quat`` flipped to the ``w >= 0`` hemisphere.
+
+    A quaternion ``q`` and ``-q`` represent the same rotation, but post-processors
+    that compute ``angle = 2 * acos(w)`` (URScript's rotation-vector emit, for
+    example) pick the long way around when ``w < 0``. Canonicalising every
+    quaternion at the IR boundary closes that footgun without changing
+    semantics. Caller is expected to have already ensured length 4.
+    """
+    if quat[0] < 0.0:
+        return (-quat[0], -quat[1], -quat[2], -quat[3])
+    return (quat[0], quat[1], quat[2], quat[3])
+
+
 # Backwards-compatible alias for code paths that imported the private name.
 _check_quat = check_quat
 
@@ -133,6 +147,7 @@ class ToolData:
         )
         object.__setattr__(self, "cog_xyz_m", _as_float_tuple(self.cog_xyz_m, 3, "cog_xyz_m"))
         _check_quat(self.tcp_quat_wxyz, "tcp_quat_wxyz")
+        object.__setattr__(self, "tcp_quat_wxyz", canonicalise_quat(self.tcp_quat_wxyz))
         object.__setattr__(self, "robhold", bool(self.robhold))
 
 
@@ -166,6 +181,8 @@ class WObjData:
         )
         _check_quat(self.base_quat_wxyz, "base_quat_wxyz")
         _check_quat(self.user_quat_wxyz, "user_quat_wxyz")
+        object.__setattr__(self, "base_quat_wxyz", canonicalise_quat(self.base_quat_wxyz))
+        object.__setattr__(self, "user_quat_wxyz", canonicalise_quat(self.user_quat_wxyz))
 
 
 @dataclass(frozen=True)
@@ -280,6 +297,7 @@ class PoseTarget:
         object.__setattr__(self, "quat_wxyz", _as_float_tuple(self.quat_wxyz, 4, "quat_wxyz"))
         object.__setattr__(self, "ext_axes_rad", _as_float_tuple(self.ext_axes_rad, name="ext_axes_rad"))
         _check_quat(self.quat_wxyz, "quat_wxyz")
+        object.__setattr__(self, "quat_wxyz", canonicalise_quat(self.quat_wxyz))
 
 
 # ---------------------------------------------------------------------------
@@ -566,6 +584,7 @@ __all__ = [
     "Wait",
     "ZoneData",
     "ZoneKind",
+    "canonicalise_quat",
     "check_quat",
     "dump",
     "from_dict",

@@ -479,3 +479,45 @@ def test_emit_to_file_strips_any_extension(tmp_path, gripper, wobj0,
     if input_path != expected_basename:
         assert not (full.parent / (full.name + ".src")).exists(), \
             f"emit_to_file wrote a doubled extension: {full}.src"
+
+
+# ---------------------------------------------------------------------------
+# $ACC.CP / $ACC.ORI1 emission (PR-B)
+# ---------------------------------------------------------------------------
+
+
+def _krl_accel_program(speed: SpeedData, gripper: ToolData, wobj0: WObjData) -> Program:
+    pose = PoseTarget((0.4, 0.0, 0.3), (1.0, 0.0, 0.0, 0.0))
+    return Program(
+        name="P",
+        tools=[gripper],
+        wobjs=[wobj0],
+        procedures=[
+            Procedure("main", body=[
+                Move(MoveKind.MOVE_L, pose, speed, ZoneData.fine(), gripper, wobj0),
+            ]),
+        ],
+    )
+
+
+def test_krl_emits_acc_cp_when_a_tcp_set(gripper, wobj0):
+    speed = SpeedData(v_tcp_mm_s=500.0, a_tcp_mm_s2=2000.0)
+    prog = _krl_accel_program(speed, gripper, wobj0)
+    src = KRLPost().emit(prog).split(DAT_SEPARATOR, 1)[0]
+    # 2000 mm/s² becomes 2 m/s²; _fmt_num strips the .0 to "2".
+    assert "$ACC.CP = 2" in src
+
+
+def test_krl_emits_acc_ori_when_a_ori_set(gripper, wobj0):
+    speed = SpeedData(v_tcp_mm_s=500.0, a_ori_deg_s2=500.0)
+    prog = _krl_accel_program(speed, gripper, wobj0)
+    src = KRLPost().emit(prog).split(DAT_SEPARATOR, 1)[0]
+    assert "$ACC.ORI1 = 500" in src
+
+
+def test_krl_no_acc_lines_when_accel_unset(gripper, wobj0):
+    speed = SpeedData(v_tcp_mm_s=500.0)  # both accel fields default to None
+    prog = _krl_accel_program(speed, gripper, wobj0)
+    src = KRLPost().emit(prog).split(DAT_SEPARATOR, 1)[0]
+    assert "$ACC.CP" not in src
+    assert "$ACC.ORI1" not in src

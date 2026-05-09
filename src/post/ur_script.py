@@ -147,27 +147,52 @@ def _move_args(speed: SpeedData, zone: ZoneData, accel: float) -> str:
 
 
 def _emit_move(move: Move) -> list[str]:
-    """Return one URScript line for the given Move."""
+    """Return one URScript line for the given Move.
+
+    Acceleration is derived from :attr:`~src.motion.ir.SpeedData.a_tcp_mm_s2`
+    (for linear/circular moves, in m/s²) or
+    :attr:`~src.motion.ir.SpeedData.a_ori_deg_s2` converted to rad/s² (for
+    joint moves). Falls back to the module-level ``DEFAULT_ACCEL_*`` constants
+    when the field is ``None``.
+    """
+    import math as _math
+
     if move.kind == MoveKind.MOVE_J:
-        args = _move_args(move.speed, move.zone, DEFAULT_ACCEL_J)
+        if move.speed.a_ori_deg_s2 is not None:
+            accel = _math.radians(move.speed.a_ori_deg_s2)
+        else:
+            accel = DEFAULT_ACCEL_J
+        args = _move_args(move.speed, move.zone, accel)
         if isinstance(move.target, JointTarget):
             tgt = _fmt_joints(move.target.q_rad)
         else:
             tgt = _fmt_pose(move.target.xyz_m, move.target.quat_wxyz)
         return [f"movej({tgt}, {args})"]
     if move.kind == MoveKind.MOVE_L:
-        args = _move_args(move.speed, move.zone, DEFAULT_ACCEL_LIN)
+        if move.speed.a_tcp_mm_s2 is not None:
+            accel = move.speed.a_tcp_mm_s2 / 1000.0
+        else:
+            accel = DEFAULT_ACCEL_LIN
+        args = _move_args(move.speed, move.zone, accel)
         assert isinstance(move.target, PoseTarget)
         tgt = _fmt_pose(move.target.xyz_m, move.target.quat_wxyz)
         return [f"movel({tgt}, {args})"]
     if move.kind == MoveKind.MOVE_C:
-        args = _move_args(move.speed, move.zone, DEFAULT_ACCEL_LIN)
+        if move.speed.a_tcp_mm_s2 is not None:
+            accel = move.speed.a_tcp_mm_s2 / 1000.0
+        else:
+            accel = DEFAULT_ACCEL_LIN
+        args = _move_args(move.speed, move.zone, accel)
         assert isinstance(move.target, PoseTarget) and move.circ_via is not None
         via = _fmt_pose(move.circ_via.xyz_m, move.circ_via.quat_wxyz)
         tgt = _fmt_pose(move.target.xyz_m, move.target.quat_wxyz)
         return [f"movec({via}, {tgt}, {args})"]
     if move.kind == MoveKind.MOVE_ABS_J:
-        args = _move_args(move.speed, move.zone, DEFAULT_ACCEL_J)
+        if move.speed.a_ori_deg_s2 is not None:
+            accel = _math.radians(move.speed.a_ori_deg_s2)
+        else:
+            accel = DEFAULT_ACCEL_J
+        args = _move_args(move.speed, move.zone, accel)
         assert isinstance(move.target, JointTarget)
         tgt = _fmt_joints(move.target.q_rad)
         return [f"movej({tgt}, {args})"]

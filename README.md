@@ -10,6 +10,8 @@ A virtual robot station + CAM toolpath planner + multi-vendor program export, bu
 - Build a virtual **station** with frames, tools, workpieces, fixtures, IO; import CAD (STL/OBJ/DXF); save/load to JSON
 - Generate **CAM-style toolpaths** from CAD (raster, polyline-follow, curve-on-surface) with redundancy-DP joint optimization and PyBullet collision checks
 - Build a vendor-neutral motion program and **export ABB RAPID, KUKA KRL, or Universal Robots URScript**
+- Compute **time-parameterised trajectories** from any program (trapezoidal velocity profile, IK-seeded continuity, MOVE_J / MOVE_L / MOVE_C) with per-sample joint-velocity, TCP-velocity, and singularity checks
+- Replay interpolated trajectories through the PyBullet bridge via **`SimSampledPathDriver`**, a drop-in proxy for the standard sim driver
 - Drive a real **ABB controller online via RWS** (HTTPS digest auth, IRC5 / OmniCore — no extra deps)
 - **Record** any sequence of moves and **replay** them through the same `Driver` Protocol that talks to the sim or to a real robot
 - Launch the **PySide6 desktop UI** (`robotarm-station`) to manage stations, preview emitted code, and spawn the PyBullet viewport
@@ -78,8 +80,9 @@ sim reset                     Return to the catalog home pose
 src/
 ├── robots/                   # Robot catalog + DH builders
 │   ├── catalog.py            # rtb-free URDF specs (panda, ur5, iiwa, abb_irb1200)
-│   ├── predefined.py         # rtb robot models (lazy import)
-│   └── custom.py             # DH-parameter robot factory
+│   ├── predefined.py         # rtb robot models (lazy import); includes hand-built KUKA iiwa 14 DHRobot
+│   ├── custom.py             # DH-parameter robot factory
+│   └── limits.py             # Per-robot velocity/acceleration JointLimits dataclass (Panda, UR5, IIWA, IRB1200)
 ├── kinematics/               # FK/IK solvers (rtb)
 ├── visualization/            # matplotlib plots
 ├── simulation/               # PyBullet desktop simulator
@@ -92,13 +95,18 @@ src/
 │   ├── tools.py              # FK/IK + sim_* tools the LLM can call
 │   ├── ollama_client.py
 │   └── fake_client.py        # Deterministic stand-in (UAT, CI)
-├── motion/                   # Vendor-neutral motion IR + record/playback
+├── motion/                   # Vendor-neutral motion IR + record/playback + path interpolation
 │   ├── ir.py                 # Move, Tool, WObj, Speed, Zone, Program (+JSON I/O)
 │   ├── recorder.py           # Capture jog actions into IR steps
-│   └── player.py             # Replay an IR Program through any Driver
+│   ├── player.py             # Replay an IR Program through any Driver
+│   ├── frames.py             # TCP/RTCP pose composition + scene-graph frame walk (resolve_pose_to_base, forward_resolve, derive_frame_mode, resolve_frame_to_root)
+│   ├── limits.py             # Limit validation + structured errors (validate_move, LimitViolation, LimitsExceeded, assert_no_violations)
+│   ├── manipulability.py     # Yoshikawa manipulability index + singularity guard (yoshikawa, is_singular)
+│   └── path.py               # Time-parameterised trajectory interpolator (Sample, SampledPath, interpolate_program, interpolate_move, _trapezoidal_profile, _arc_fit_3pt, _slerp_quat, _slerp_via)
 ├── drivers/                  # Vendor-neutral robot interface
 │   ├── base.py               # Driver Protocol + RobotState
 │   ├── sim/sim_driver.py     # SimBridge adapter
+│   ├── sim/sim_sampled_path.py  # Limits-aware sim driver proxy (SimSampledPathDriver)
 │   └── abb/rws_client.py     # ABB Robot Web Services online driver (stdlib HTTPS+digest)
 ├── post/                     # Vendor program emission
 │   ├── base.py               # Post Protocol
@@ -127,6 +135,7 @@ examples/                              # End-to-end demos (pure Python, runnable
   demo_toolpath_stl.py                 # STL -> raster -> joint-optimal -> RAPID
   demo_station_save_load.py            # Build a station, dump/load JSON
   demo_station_gui.py                  # Launch the PySide6 desktop UI
+  demo_path_calculation.py            # Build a MOVE_L program, interpolate, replay via SimSampledPathDriver
 docs/                                  # UAT checklist, report template
 scripts/uat_run.py                     # Automated UAT harness
 .github/workflows/ci.yml               # Headless tests + lint + rtb-extras job
@@ -143,7 +152,11 @@ vendor-neutral `Program`. Unit conversions (metres → mm, radians → degrees,
 quaternion → RAPID `wxyz` / KRL ZYX-Euler / URScript rotation-vector) happen
 at the boundary; predefined RAPID/KRL names like `fine`/`z10`/`v100` are
 reused when IR values match exactly, custom `speeddata`/`zonedata` declared
-otherwise.
+otherwise. When `SpeedData.a_tcp_mm_s2` or `a_ori_deg_s2` is set, the emitters
+inject vendor acceleration instructions: RAPID emits `AccSet acc%, 100;` before
+the move; KRL emits `$ACC.CP` (m/s²) and `$ACC.ORI1` (deg/s²); URScript passes
+`a=<m/s²>` (linear moves) or `a=<rad/s²>` (joint moves) directly on the motion
+call.
 
 ### Generate a toolpath from CAD
 
@@ -156,6 +169,40 @@ python examples/demo_toolpath_stl.py        # STL -> raster -> joint-optimal -> 
 `||Δq|| + λ/manipulability`, filtering by joint limits and Yoshikawa
 manipulability. `src/collision/checker.py` runs a headless PyBullet client
 to reject colliding configurations.
+
+### Time-parameterised path interpolation
+
+`interpolate_program` converts any `Program` into a `SampledPath` — a timestamped sequence of joint positions and TCP poses, checked against the robot's velocity and acceleration limits at every sample.
+
+```python
+from src.motion.path import interpolate_program, SampledPath
+from src.motion.limits import LimitsExceeded
+
+try:
+    path: SampledPath = interpolate_program(prog, robot, dt_s=0.02)
+except LimitsExceeded as exc:
+    for v in exc.violations:
+        print(v.error_code, v.joint_index, v.requested, v.allowed)
+```
+
+The same call handles MOVE_J (joint-space ramp), MOVE_L (Cartesian linear with time-synchronised linear/angular axes), and MOVE_C (circular arc fit through the via-point with piecewise SLERP orientation). `ToolData.robhold` selects the composition direction: `robhold=True` is standard TCP mode; `robhold=False` activates RTCP mode where the workobject is robot-held and the tool is world-fixed.
+
+`LimitsExceeded` carries a `.violations` list; each entry has `error_code` (`JOINT_VELOCITY`, `JOINT_ACCEL`, `TCP_VELOCITY`, `TCP_ANGULAR_VELOCITY`, `SINGULARITY`, or `JOINT_POSITION`), `joint_index`, `requested`, and `allowed`.
+
+To replay through the simulator without touching higher-level driver code, wrap the existing sim driver:
+
+```python
+from src.drivers.sim.sim_sampled_path import SimSampledPathDriver
+
+driver = SimSampledPathDriver(inner_sim_driver, robot, dt_s=0.02)
+path = driver.play_program(prog)   # returns the SampledPath after replay
+```
+
+Run the full demo:
+
+```bash
+python examples/demo_path_calculation.py
+```
 
 ### Drive a real ABB controller (online RWS)
 
@@ -223,6 +270,8 @@ This branch is the UAT-readiness sprint. Status:
 - ✅ M5 — pyproject.toml + Makefile + GitHub Actions CI
 - ✅ M6 — `scripts/uat_run.py` + report template + Ollama manual
 - ✅ M7 — README + INSTALL
+- 🔄 M8 — Path interpolation foundations: limits data model (`JointLimits`), TCP/RTCP frame composition, Yoshikawa manipulability extraction (PRs #4, #5 — not yet merged to main)
+- 🔄 M9 — Path interpolator + `SimSampledPathDriver` + post-processor acceleration emission (PRs #4, #5 — not yet merged to main)
 
 See `docs/UAT_CHECKLIST.md` for the tester checklist and `docs/UAT_REPORT_TEMPLATE.md` for the signoff form.
 
@@ -235,6 +284,8 @@ See `docs/UAT_CHECKLIST.md` for the tester checklist and `docs/UAT_REPORT_TEMPLA
 | GUI opens, REPL hangs after window close | Old build (pre-M2) | Rebuild from current commit |
 | `IK_UNREACHABLE` for an obviously-reachable point | URDF override pointing at a model whose EE link doesn't match catalog | Use `--robot <name>` instead of `--urdf` |
 | LLM ignores tool calls | Model lacks tool-calling support | Use `llama3.1` or another tool-capable model |
+| `LimitsExceeded` raised on `sim_move` or `play_program` | Speed or acceleration on the requested move exceeds catalog limits for that robot | Inspect `exc.violations` to see which joint or axis tripped; reduce `SpeedData` fields or choose a robot with higher limits |
+| `Unknown robot 'iiwa'` (older clones) | The `iiwa` hand-built DHRobot was not wired into the rtb factory before PR-B | Pull the latest branch — `get_robot("iiwa")` ships with the path-calculation work. |
 
 ## License
 
