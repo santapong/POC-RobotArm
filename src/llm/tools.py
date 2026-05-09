@@ -14,46 +14,6 @@ from src.motion.limits import LimitsExceeded
 # Tolerance (metres) under which an IK move is considered successful.
 _SIM_IK_TOL = 0.05
 
-# Sampling interval used when routing sim moves through the path interpolator.
-_SIM_INTERP_DT_S = 0.05
-
-
-def _one_move_program(kind_str: str, target):
-    """Build a single-Move Program suitable for ``interpolate_program``.
-
-    Args:
-        kind_str: One of ``"MOVE_ABS_J"`` or ``"MOVE_L"``.
-        target: A :class:`~src.motion.ir.JointTarget` or
-            :class:`~src.motion.ir.PoseTarget`.
-
-    Returns:
-        A :class:`~src.motion.ir.Program` with a ``"main"`` procedure
-        containing one Move.
-    """
-    from src.motion.ir import (
-        Move,
-        MoveKind,
-        Procedure,
-        Program,
-        SpeedData,
-        ToolData,
-        WObjData,
-        ZoneData,
-    )
-
-    tool = ToolData(name="tool0", mass_kg=0.001, tcp_xyz_m=(0.0, 0.0, 0.0), tcp_quat_wxyz=(1.0, 0.0, 0.0, 0.0))
-    wobj = WObjData(name="wobj0", base_xyz_m=(0.0, 0.0, 0.0), base_quat_wxyz=(1.0, 0.0, 0.0, 0.0))
-    move = Move(
-        kind=MoveKind(kind_str),
-        target=target,
-        speed=SpeedData(v_tcp_mm_s=100.0),
-        zone=ZoneData.fine(),
-        tool=tool,
-        wobj=wobj,
-    )
-    proc = Procedure(name="main", body=(move,))
-    return Program(name="_llm_move", procedures=(proc,))
-
 
 def _sim_bridge():
     """Return the active SimBridge or ``None`` if the simulator isn't running."""
@@ -436,36 +396,46 @@ def execute_tool(name: str, arguments: dict) -> str:
             relative = bool(arguments.get("relative", False))
             angle_rad = math.radians(angle_deg)
 
-            # Read current angles to build the full-joint target vector.
-            def _get_cur(sim):
-                return list(sim.get_joint_angles())
+            def _move(sim):
+                if idx < 0 or idx >= sim.num_joints:
+                    raise ValueError(
+                        f"joint index {idx} out of range [0, {sim.num_joints})"
+                    )
+                cur = sim.get_joint_angles()
+                joint = sim.joints[idx]
+                requested = (cur[idx] + angle_rad) if relative else angle_rad
+                applied = max(joint.lower, min(joint.upper, requested))
+                target = list(cur)
+                target[idx] = applied
+                # Snap and hold so the visual update is immediate.
+                sim.reset_joint_angles(target)
+                sim.set_joint_targets(target)
+                return {
+                    "requested": requested,
+                    "applied": applied,
+                    "clamped": applied != requested,
+                    "lower": joint.lower,
+                    "upper": joint.upper,
+                }
 
             try:
-                cur_angles = bridge.submit(_get_cur)
+                result = bridge.submit(_move)
             except FuturesTimeoutError:
                 return _sim_err("SIM_TIMEOUT", "GUI loop did not respond in time.")
+            except ValueError as e:
+                return _sim_err("INVALID_ARG", str(e))
 
-            if idx < 0 or idx >= len(cur_angles):
+            if result["clamped"]:
                 return _sim_err(
-                    "INVALID_ARG",
-                    f"joint index {idx} out of range [0, {len(cur_angles)})",
+                    "JOINT_LIMIT_CLAMPED",
+                    "Requested angle was clamped to joint limits.",
+                    joint_index=idx,
+                    requested_rad=result["requested"],
+                    applied_rad=result["applied"],
+                    lower_rad=result["lower"],
+                    upper_rad=result["upper"],
                 )
-
-            requested = (cur_angles[idx] + angle_rad) if relative else angle_rad
-            target_q = list(cur_angles)
-            target_q[idx] = requested
-
-            # Route through limits-aware interpolator.
-            from src.motion.ir import JointTarget
-            from src.motion.path import interpolate_program
-            from src.robots.predefined import get_robot
-
-            robot_name = bridge.sim.spec.name if (bridge.sim.spec and bridge.sim.spec.name) else "panda"
-            robot = get_robot(robot_name)
-            prog = _one_move_program("MOVE_ABS_J", JointTarget(q_rad=tuple(float(v) for v in target_q)))
-            path = interpolate_program(prog, robot, dt_s=_SIM_INTERP_DT_S, raise_on_violation=True)
-            bridge.start_trajectory([list(s.q_rad) for s in path.samples], dwell_s=_SIM_INTERP_DT_S)
-            return _sim_ok(joint_index=idx, applied_rad=requested)
+            return _sim_ok(joint_index=idx, applied_rad=result["applied"])
 
         elif name == "sim_set_joints":
             bridge = _sim_bridge()
@@ -473,32 +443,38 @@ def execute_tool(name: str, arguments: dict) -> str:
                 return _sim_err("SIM_DISCONNECTED", "Simulator is not running.")
             angles = list(arguments["angles_rad"])
 
-            # Validate joint count via a quick snapshot.
-            def _get_nj(sim):
-                return sim.num_joints
+            def _move(sim):
+                if len(angles) != sim.num_joints:
+                    raise ValueError(
+                        f"expected {sim.num_joints} joint angles, got {len(angles)}"
+                    )
+                clamped: list[float] = []
+                any_clamp = False
+                for j, a in zip(sim.joints, angles):
+                    ca = max(j.lower, min(j.upper, float(a)))
+                    if ca != a:
+                        any_clamp = True
+                    clamped.append(ca)
+                sim.reset_joint_angles(clamped)
+                sim.set_joint_targets(clamped)
+                return {"clamped": any_clamp, "applied": clamped}
 
             try:
-                num_joints = bridge.submit(_get_nj)
+                result = bridge.submit(_move)
             except FuturesTimeoutError:
                 return _sim_err("SIM_TIMEOUT", "GUI loop did not respond in time.")
+            except ValueError as e:
+                return _sim_err("INVALID_ARG", str(e))
 
-            if len(angles) != num_joints:
+            payload = {"applied_rad": result["applied"]}
+            if result["clamped"]:
                 return _sim_err(
-                    "INVALID_ARG",
-                    f"expected {num_joints} joint angles, got {len(angles)}",
+                    "JOINT_LIMIT_CLAMPED",
+                    "One or more joint angles were clamped to limits.",
+                    requested_rad=angles,
+                    **payload,
                 )
-
-            # Route through limits-aware interpolator.
-            from src.motion.ir import JointTarget
-            from src.motion.path import interpolate_program
-            from src.robots.predefined import get_robot
-
-            robot_name = bridge.sim.spec.name if (bridge.sim.spec and bridge.sim.spec.name) else "panda"
-            robot = get_robot(robot_name)
-            prog = _one_move_program("MOVE_ABS_J", JointTarget(q_rad=tuple(float(v) for v in angles)))
-            path = interpolate_program(prog, robot, dt_s=_SIM_INTERP_DT_S, raise_on_violation=True)
-            bridge.start_trajectory([list(s.q_rad) for s in path.samples], dwell_s=_SIM_INTERP_DT_S)
-            return _sim_ok(applied_rad=angles)
+            return _sim_ok(**payload)
 
         elif name == "sim_move_to_xyz":
             bridge = _sim_bridge()
@@ -510,68 +486,49 @@ def execute_tool(name: str, arguments: dict) -> str:
             rpy = arguments.get("rpy")
             place_marker = bool(arguments.get("place_marker", True))
 
-            # Build a quaternion from optional rpy.
-            if rpy is not None:
-                roll, pitch, yaw = float(rpy[0]), float(rpy[1]), float(rpy[2])
-                # Convert ZYX Euler to quaternion (w, x, y, z).
-                cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
-                cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
-                cr, sr = math.cos(roll / 2), math.sin(roll / 2)
-                qw = cr * cp * cy + sr * sp * sy
-                qx = sr * cp * cy - cr * sp * sy
-                qy = cr * sp * cy + sr * cp * sy
-                qz = cr * cp * sy - sr * sp * cy
-                target_quat = (qw, qx, qy, qz)
-            else:
-                target_quat = (1.0, 0.0, 0.0, 0.0)
+            def _solve_and_command(sim):
+                target_orn = None
+                if rpy is not None:
+                    import pybullet as p
 
-            # Route through limits-aware interpolator.
-            from src.motion.ir import PoseTarget
-            from src.motion.path import interpolate_program
-            from src.robots.predefined import get_robot
+                    target_orn = list(p.getQuaternionFromEuler(list(rpy)))
+                sol = sim.solve_ik([x, y, z], target_orn)
+                # Snap the arm to the IK solution so the visual update is immediate,
+                # then hold it there with position control for any subsequent physics.
+                sim.reset_joint_angles(sol)
+                sim.set_joint_targets(sol)
+                actual_pos, _ = sim.get_end_effector_pose()
+                marker_id = sim.add_target_marker([x, y, z]) if place_marker else None
+                dist = math.sqrt(
+                    sum((a - b) ** 2 for a, b in zip(actual_pos, [x, y, z]))
+                )
+                return {
+                    "joint_angles": sol,
+                    "achieved_position": actual_pos,
+                    "distance": dist,
+                    "marker_id": marker_id,
+                }
 
-            robot_name = bridge.sim.spec.name if (bridge.sim.spec and bridge.sim.spec.name) else "panda"
-            robot = get_robot(robot_name)
-            prog = _one_move_program("MOVE_L", PoseTarget(xyz_m=(x, y, z), quat_wxyz=target_quat))
-            path = interpolate_program(prog, robot, dt_s=_SIM_INTERP_DT_S, raise_on_violation=True)
-            bridge.start_trajectory([list(s.q_rad) for s in path.samples], dwell_s=_SIM_INTERP_DT_S)
+            try:
+                result = bridge.submit(_solve_and_command, timeout=10.0)
+            except FuturesTimeoutError:
+                return _sim_err("SIM_TIMEOUT", "GUI loop did not respond in time.")
 
-            # Verify achieved position using the last sample's FK result.
-            if path.samples:
-                last = path.samples[-1]
-                actual_pos = list(last.flange_xyz_m)
-                joint_angles = list(last.q_rad)
-            else:
-                actual_pos = [x, y, z]
-                joint_angles = []
-
-            # Also place a marker if requested.
-            if place_marker:
-                def _marker(sim):
-                    sim.add_target_marker([x, y, z])
-
-                try:
-                    bridge.submit(_marker)
-                except FuturesTimeoutError:
-                    pass
-
-            dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(actual_pos, [x, y, z])))
-
-            if dist > _SIM_IK_TOL:
+            if result["distance"] > _SIM_IK_TOL:
                 return _sim_err(
                     "IK_UNREACHABLE",
                     f"IK could not reach target within {_SIM_IK_TOL} m "
-                    f"(distance={dist:.4f} m).",
+                    f"(distance={result['distance']:.4f} m).",
                     requested_position=[x, y, z],
-                    achieved_position=actual_pos,
-                    joint_angles=[round(a, 6) for a in joint_angles],
-                    distance=dist,
+                    achieved_position=result["achieved_position"],
+                    joint_angles=[round(a, 6) for a in result["joint_angles"]],
+                    distance=result["distance"],
                 )
             return _sim_ok(
                 requested_position=[x, y, z],
-                achieved_position=[round(v, 6) for v in actual_pos],
-                joint_angles=[round(a, 6) for a in joint_angles],
-                distance=dist,
+                achieved_position=[round(v, 6) for v in result["achieved_position"]],
+                joint_angles=[round(a, 6) for a in result["joint_angles"]],
+                distance=result["distance"],
             )
 
         elif name == "sim_play_trajectory":
@@ -581,62 +538,23 @@ def execute_tool(name: str, arguments: dict) -> str:
             waypoints = arguments["waypoints"]
             dwell_s = float(arguments.get("dwell_s", 0.5))
 
-            # Validate waypoint shapes and wrap into MOVE_ABS_J moves for
-            # per-sample limit checks.
-            def _get_nj(sim):
-                return sim.num_joints
+            def _install(sim):
+                for i, wp in enumerate(waypoints):
+                    if len(wp) != sim.num_joints:
+                        raise ValueError(
+                            f"waypoint {i} has {len(wp)} values, expected {sim.num_joints}"
+                        )
+                bridge.start_trajectory(waypoints, dwell_s)
+                return {"installed": len(waypoints)}
 
             try:
-                num_joints = bridge.submit(_get_nj)
+                result = bridge.submit(_install)
             except FuturesTimeoutError:
                 return _sim_err("SIM_TIMEOUT", "GUI loop did not respond in time.")
-
-            for i, wp in enumerate(waypoints):
-                if len(wp) != num_joints:
-                    return _sim_err(
-                        "INVALID_ARG",
-                        f"waypoint {i} has {len(wp)} values, expected {num_joints}",
-                    )
-
-            # Build a multi-Move Program from the waypoints and run through
-            # interpolate_program for limit checking (raise_on_violation=False so
-            # violations are collected but don't abort the trajectory).
-            from src.motion.ir import (
-                JointTarget,
-                Move,
-                MoveKind,
-                Procedure,
-                Program,
-                SpeedData,
-                ToolData,
-                WObjData,
-                ZoneData,
-            )
-            from src.motion.path import interpolate_program
-            from src.robots.predefined import get_robot
-
-            robot_name = bridge.sim.spec.name if (bridge.sim.spec and bridge.sim.spec.name) else "panda"
-            robot = get_robot(robot_name)
-            tool = ToolData(name="tool0", mass_kg=0.001, tcp_xyz_m=(0.0, 0.0, 0.0), tcp_quat_wxyz=(1.0, 0.0, 0.0, 0.0))
-            wobj = WObjData(name="wobj0", base_xyz_m=(0.0, 0.0, 0.0), base_quat_wxyz=(1.0, 0.0, 0.0, 0.0))
-            moves = [
-                Move(
-                    kind=MoveKind.MOVE_ABS_J,
-                    target=JointTarget(q_rad=tuple(float(v) for v in wp)),
-                    speed=SpeedData(v_tcp_mm_s=100.0),
-                    zone=ZoneData.fine(),
-                    tool=tool,
-                    wobj=wobj,
-                )
-                for wp in waypoints
-            ]
-            proc = Procedure(name="main", body=tuple(moves))
-            prog = Program(name="_llm_traj", procedures=(proc,))
-            # raise_on_violation=False: existing behaviour passes raw waypoints through.
-            path = interpolate_program(prog, robot, dt_s=dwell_s, raise_on_violation=False)
-            bridge.start_trajectory([list(s.q_rad) for s in path.samples], dwell_s=dwell_s)
+            except ValueError as e:
+                return _sim_err("INVALID_ARG", str(e))
             return _sim_ok(
-                waypoints=len(waypoints),
+                waypoints=result["installed"],
                 dwell_s=dwell_s,
                 message="Trajectory queued; advancing in the background.",
             )
