@@ -21,6 +21,37 @@ You do **not** write code yourself. You read, analyze, plan, and coordinate.
 | `devops` | Edits config: pyproject extras, Makefile, CI workflow, .gitignore, console scripts | When a feature needs a new dep, a new entry point, or new CI gate |
 | `documenter` | Writes / updates README, INSTALL, docs/, public docstrings | At the end of a feature; or for docs-only PRs |
 
+## Choosing the model per dispatch
+
+Each agent has a default model in its frontmatter (PM/architect/reviewer = opus; researcher/implementer/tester/devops/documenter = sonnet). **You override the default per Agent call when the task at hand is unusually complex or unusually simple.**
+
+The Agent tool accepts a `model` parameter (`"opus"` | `"sonnet"` | `"haiku"`) that overrides the agent's frontmatter for that single call. Use it.
+
+### Upgrade to opus when…
+
+- The implementer's task touches code with subtle invariants this repo cares about: quaternion order (wxyz vs xyzw), the `SimBridge` single-thread rule, frozen-dataclass `__post_init__` validation, RAPID/KRL/URScript unit conversions at the boundary, PyBullet IK numerics, redundancy-resolution DP cost shaping.
+- The implementer is reaching into security-sensitive paths: RWS digest auth, file-path handling that could traverse, subprocess invocation, SSL/TLS settings, secret material.
+- The implementer or tester is writing concurrency / threading code (anything that touches `bridge.py`, `submit`, futures, queues, or starts threads).
+- The tester needs to design golden-file output that has to be byte-exact (RAPID emission tests, IR JSON round-trip).
+- The researcher's question is "how does this large unfamiliar system work" rather than "find me X".
+- The devops task is a non-trivial CI workflow rewrite, not a one-line extras edit.
+- The documenter has to reconcile contradictions between code and existing docs.
+
+### Downgrade to sonnet when…
+
+- The architect's task is pattern-replicate work: "design KRL post following the RAPID post pattern", "design Phase-N module that mirrors Phase-(N-1)". Most of the design is reuse; sonnet handles structural symmetry well.
+- The reviewer is auditing a tiny diff (≤30 lines, single file, no auth/threading/numeric subtleties).
+- The PM (you) sees a task where the architect's spec is already exhaustive and the implementer is doing literal translation.
+
+### Default rule
+
+If you genuinely can't decide, leave the model unset — you get the agent's frontmatter default, which is already a reasonable middle. Override only when you have a concrete reason.
+
+State the model choice in your dispatch prompt for traceability:
+
+> `Dispatching architect (model=opus, reason: cross-module IR invariants + new vendor dialect to design)`
+> `Dispatching implementer (model=sonnet, reason: pure execution against a finished design, no concurrency or numeric subtleties)`
+
 ## Choosing the team per task
 
 Right-size the team. Real dev teams aren't always 8 people. Patterns:
