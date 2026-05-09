@@ -145,10 +145,51 @@ def test_validation_io_signal_kind_and_value():
     # Non-numeric default_value is rejected.
     with pytest.raises(ValueError, match="default_value"):
         IOSignal("x", "DO", default_value="high")  # type: ignore[arg-type]
-    # All four legal kinds work.
+    # All four legal kinds work with the dataclass-default value (0).
     for kind in ("DI", "DO", "AI", "AO"):
         sig = IOSignal(f"s_{kind}", kind)  # type: ignore[arg-type]
         assert sig.kind == kind
+
+
+# Audit must-fix #5: cross-check ``kind`` against ``default_value`` type.
+# Earlier the validator only checked that the value was int/float/bool, which
+# let bool slip through int (Python's `bool` is a subclass of `int`) and let
+# float silently "default" a digital signal.
+
+
+def test_iosignal_digital_rejects_float_default():
+    """A DI/DO signal with a float default is meaningless."""
+    for kind in ("DI", "DO"):
+        with pytest.raises(ValueError, match="digital"):
+            IOSignal("x", kind, default_value=0.5)  # type: ignore[arg-type]
+
+
+def test_iosignal_digital_rejects_out_of_range_int():
+    """A DI/DO signal must default to 0, 1, True, or False (not e.g. 2 or -1)."""
+    for kind, bad in (("DO", 2), ("DI", -1)):
+        with pytest.raises(ValueError, match="digital"):
+            IOSignal("x", kind, default_value=bad)  # type: ignore[arg-type]
+
+
+def test_iosignal_digital_accepts_bool_or_zero_one():
+    """Legal digital defaults: True, False, 0, 1."""
+    for value in (True, False, 0, 1):
+        sig = IOSignal("x", "DO", default_value=value)
+        assert sig.default_value == value
+
+
+def test_iosignal_analog_rejects_bool_default():
+    """An AI/AO signal with a bool default would be silently coerced to 0/1."""
+    for kind in ("AI", "AO"):
+        with pytest.raises(ValueError, match="bool"):
+            IOSignal("x", kind, default_value=True)  # type: ignore[arg-type]
+
+
+def test_iosignal_analog_accepts_int_or_float():
+    """Legal analog defaults: any int or float."""
+    for value in (0, 1, -3, 0.0, 3.14, -2.7):
+        sig = IOSignal("x", "AI", default_value=value)
+        assert sig.default_value == value
 
 
 # ---------------------------------------------------------------------------

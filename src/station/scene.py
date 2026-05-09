@@ -187,11 +187,33 @@ class IOSignal:
             raise ValueError(
                 f"IOSignal.kind must be one of {_IO_KINDS}, got {self.kind!r}"
             )
-        if not isinstance(self.default_value, (int, float, bool)):
-            raise ValueError(
-                "IOSignal.default_value must be int, float, or bool; "
-                f"got {type(self.default_value).__name__}"
-            )
+        # Cross-check kind against default_value type. Python treats bool as a
+        # subclass of int, so a naive `isinstance(v, (int, float, bool))` lets
+        # both bool slip through analog and float slip through digital.
+        if self.kind in ("DI", "DO"):
+            # Digital: 0/1 or bool. Reject float.
+            if isinstance(self.default_value, bool):
+                pass
+            elif isinstance(self.default_value, int) and self.default_value in (0, 1):
+                pass
+            else:
+                raise ValueError(
+                    f"IOSignal.default_value for digital {self.kind} signal {self.name!r} "
+                    f"must be 0, 1, or bool; got {self.default_value!r}"
+                )
+        else:  # AI / AO
+            # Analog: int or float. Reject bool (subclass of int).
+            if isinstance(self.default_value, bool):
+                raise ValueError(
+                    f"IOSignal.default_value for analog {self.kind} signal "
+                    f"{self.name!r} must be int or float, not bool"
+                )
+            if not isinstance(self.default_value, (int, float)):
+                raise ValueError(
+                    f"IOSignal.default_value for analog {self.kind} signal "
+                    f"{self.name!r} must be int or float; got "
+                    f"{type(self.default_value).__name__}"
+                )
 
 
 @dataclass(frozen=True)
