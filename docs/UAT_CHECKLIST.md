@@ -2,6 +2,10 @@
 
 Tester: ____________________   Date: ____________________   Build: ____________________
 
+> **Running UAT on Kali Linux?** See [`docs/UAT_KALI.md`](UAT_KALI.md) for the
+> apt + pip + xvfb setup walkthrough, then come back here for the story table.
+> A `make install-kali` one-shot covers system libs + extras in a single step.
+
 Run each story below and tick the result. Attach `artifacts/smoke_*.png` and the
 `scripts/uat_run.py` output to the report.
 
