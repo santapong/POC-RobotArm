@@ -31,6 +31,7 @@ Reference: KUKA System Software 8.x Programming Manual (KSS).
 from __future__ import annotations
 
 import math
+import os
 from io import StringIO
 
 from src.motion.ir import (
@@ -393,12 +394,10 @@ class KRLPost:
 
     def emit_to_file(self, program: Program, path: str) -> None:
         text = self.emit(program)
-        # Strip a single trailing ``.src`` if the caller passed one so that
-        # ``<basename>.src`` and ``<basename>.dat`` end up paired.
-        if path.endswith(".src"):
-            base = path[:-4]
-        else:
-            base = path
+        # Strip *any* trailing extension so foo / foo.src / foo.dat / foo.SRC
+        # all pair to foo.src + foo.dat. Without this, foo.dat would write
+        # foo.dat.src + foo.dat.dat.
+        base, _ = os.path.splitext(path)
         src_text, _, dat_text = text.partition(DAT_SEPARATOR + "\n")
         with open(base + ".src", "w", encoding="utf-8") as fh:
             fh.write(src_text)

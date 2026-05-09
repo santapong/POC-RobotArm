@@ -439,3 +439,43 @@ def test_golden_hello_program(gripper, wobj0):
         ])],
     )
     assert KRLPost().emit(prog) == GOLDEN_HELLO
+
+
+# ---------------------------------------------------------------------------
+# Regression: emit_to_file extension handling (audit must-fix #1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("input_path,expected_basename", [
+    ("foo",        "foo"),
+    ("foo.src",    "foo"),
+    ("foo.dat",    "foo"),
+    ("foo.txt",    "foo"),
+    ("path/to/x",  "path/to/x"),
+])
+def test_emit_to_file_strips_any_extension(tmp_path, gripper, wobj0,
+                                           input_path, expected_basename):
+    """Earlier the post only stripped a literal '.src' suffix, so passing
+    'foo.dat' wrote 'foo.dat.src' + 'foo.dat.dat'. After the fix any
+    trailing extension is stripped and the basename is paired cleanly.
+    """
+    home = JointTarget((0.0,) * 6)
+    prog = Program(
+        name="P",
+        tools=[gripper],
+        wobjs=[wobj0],
+        procedures=[Procedure("main", body=[
+            Move(MoveKind.MOVE_ABS_J, home, SpeedData(200.0),
+                 ZoneData.fine(), gripper, wobj0),
+        ])],
+    )
+    full = tmp_path / input_path
+    full.parent.mkdir(parents=True, exist_ok=True)
+    KRLPost().emit_to_file(prog, str(full))
+    expected_full = tmp_path / expected_basename
+    assert (expected_full.parent / (expected_full.name + ".src")).exists()
+    assert (expected_full.parent / (expected_full.name + ".dat")).exists()
+    # Belt-and-braces: ensure we did NOT produce the bad doubled extension.
+    if input_path != expected_basename:
+        assert not (full.parent / (full.name + ".src")).exists(), \
+            f"emit_to_file wrote a doubled extension: {full}.src"
