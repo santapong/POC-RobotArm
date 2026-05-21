@@ -1,17 +1,12 @@
-"""Phase 0 FastAPI app: /health endpoint + /ws/telemetry stub."""
+"""FastAPI application entry point for the POC-RobotArm server.
 
-from fastapi import FastAPI, WebSocket
+Phase 1: delegates to ``server.main.create_app`` and re-exports the
+application instance so ``uvicorn server.app:app`` and the existing
+Phase 0 health test both continue to work.
+"""
 
-app = FastAPI(title="POC-RobotArm Server", version="0.0.0")
+from server.main import create_app
 
+app = create_app()
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
-
-
-@app.websocket("/ws/telemetry")
-async def telemetry(websocket: WebSocket) -> None:
-    await websocket.accept()
-    await websocket.send_json({"type": "hello"})
-    await websocket.close()
+__all__ = ["app", "create_app"]

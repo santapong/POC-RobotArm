@@ -1,0 +1,119 @@
+"""Domain-exception → HTTP status / ErrorResponse mapper.
+
+Public API:
+- ``map_exception`` — translates a domain exception to (http_status, ErrorResponse).
+- ``http_error`` — builds an HTTPException whose detail is a serialised ErrorResponse.
+
+Both are called from ``server/main.py`` and from individual routers.
+"""
+
+from __future__ import annotations
+
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+from fastapi import HTTPException
+
+from server.models.errors import ErrorResponse
+
+
+def http_error(
+    status_code: int,
+    code: str,
+    detail: str,
+    hint: str | None = None,
+    violations: list[dict] | None = None,
+) -> HTTPException:
+    """Return an :class:`HTTPException` whose ``detail`` is a serialised :class:`ErrorResponse`.
+
+    FastAPI will convert the ``detail`` dict to JSON verbatim, so the client
+    always receives ``{"detail": "...", "code": "...", ...}``.
+
+    Args:
+        status_code: HTTP status code (e.g. 404, 422, 503).
+        code: Machine-readable error code from design §A.4 (e.g. ``"ROBOT_UNKNOWN"``).
+        detail: Human-readable description.
+        hint: Optional actionable hint for the caller.
+        violations: Optional list of structured validation violation dicts.
+    """
+    payload = ErrorResponse(
+        detail=detail, code=code, hint=hint, violations=violations
+    ).model_dump(exclude_none=True)
+    return HTTPException(status_code=status_code, detail=payload)
+
+
+def map_exception(exc: Exception) -> tuple[int, ErrorResponse]:
+    """Translate a domain exception to an ``(http_status, ErrorResponse)`` pair.
+
+    Notes
+    -----
+    Mapping table (matches design §A.4):
+
+    - ``KeyError`` (unknown robot in catalog) → 404 ``ROBOT_UNKNOWN``
+    - ``ValueError`` from dataclass ``__post_init__`` → 422 ``VALIDATION_ERROR``
+    - ``LimitsExceeded`` → 409 ``LIMITS_EXCEEDED`` (violations populated)
+    - ``FileNotFoundError`` → 404 ``ASSET_NOT_FOUND``
+    - ``NotImplementedError`` → 501 ``NOT_SUPPORTED``
+    - ``RuntimeError("not initialized")`` or ``RuntimeError("SIM_DISCONNECTED")`` → 503
+    - ``TimeoutError`` / ``FuturesTimeoutError`` → 504 ``SIM_TIMEOUT``
+    - Anything else → 500 ``INTERNAL_ERROR``
+    """
+    # Import lazily to avoid circular dep on sim / domain modules at startup.
+    try:
+        from src.motion.limits import LimitsExceeded
+    except ImportError:
+        LimitsExceeded = None  # type: ignore[assignment, misc]
+
+    if LimitsExceeded is not None and isinstance(exc, LimitsExceeded):
+        return 409, ErrorResponse(
+            detail=str(exc),
+            code="LIMITS_EXCEEDED",
+            violations=[v.to_dict() for v in exc.violations],
+        )
+
+    if isinstance(exc, KeyError):
+        return 404, ErrorResponse(
+            detail=str(exc),
+            code="ROBOT_UNKNOWN",
+            hint="Check /api/robots/catalog for valid names.",
+        )
+
+    if isinstance(exc, ValueError):
+        return 422, ErrorResponse(
+            detail=str(exc),
+            code="VALIDATION_ERROR",
+        )
+
+    if isinstance(exc, FileNotFoundError):
+        return 404, ErrorResponse(
+            detail=str(exc),
+            code="ASSET_NOT_FOUND",
+        )
+
+    if isinstance(exc, NotImplementedError):
+        return 501, ErrorResponse(
+            detail=str(exc),
+            code="NOT_SUPPORTED",
+        )
+
+    if isinstance(exc, (FuturesTimeoutError, TimeoutError)):
+        return 504, ErrorResponse(
+            detail="Simulation command timed out.",
+            code="SIM_TIMEOUT",
+        )
+
+    if isinstance(exc, RuntimeError):
+        msg = str(exc).lower()
+        if "not initialized" in msg or "sim_disconnected" in msg or "not initializ" in msg:
+            return 503, ErrorResponse(
+                detail=str(exc),
+                code="SIM_DISCONNECTED",
+                hint="Spawn a robot first to initialise the simulator.",
+            )
+
+    return 500, ErrorResponse(
+        detail=str(exc),
+        code="INTERNAL_ERROR",
+    )
+
+
+__all__ = ["http_error", "map_exception"]

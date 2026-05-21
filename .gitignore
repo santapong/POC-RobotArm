@@ -20,3 +20,5 @@ web/node_modules
 web/dist
 web/.vite
 web/coverage
+web/pnpm-lock.yaml
+web/tsconfig.tsbuildinfo

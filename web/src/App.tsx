@@ -1,23 +1,49 @@
-import { Canvas } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+/**
+ * Application root — wires up WS hooks, catalog preload, and the layout shell.
+ *
+ * Mounts the Toaster (sonner) and all dialog components so they are always
+ * available regardless of which panel is active.
+ */
+
+import { useEffect } from "react";
+import { Toaster } from "@/components/ui/sonner";
+import { Layout } from "./components/Layout";
+import { FileDialogs } from "./components/FileDialogs";
+import { AboutDialog } from "./components/AboutDialog";
+import { useTelemetry } from "./ws/useTelemetry";
+import { useEvents } from "./ws/useEvents";
+import { useCatalogStore } from "./store/catalog";
+import { useStationStore } from "./store/station";
+import { getCatalog } from "./api/robots";
+import { getStation } from "./api/station";
 
 export default function App() {
+  // Activate WebSocket hooks at root level so they persist for the app lifetime
+  useTelemetry();
+  useEvents();
+
+  const setCatalog = useCatalogStore((s) => s.setCatalog);
+  const setStation = useStationStore((s) => s.setStation);
+
+  // Preload catalog and initial station on mount
+  useEffect(() => {
+    void getCatalog()
+      .then(setCatalog)
+      .catch(() => {
+        // Server may not be running yet; WS reconnect handles retry implicitly
+      });
+
+    void getStation()
+      .then(setStation)
+      .catch(() => undefined);
+  }, [setCatalog, setStation]);
+
   return (
-    <div className="flex h-full w-full flex-col">
-      <header className="bg-slate-900 px-4 py-2 text-lg font-semibold text-white">
-        POC-RobotArm
-      </header>
-      <main className="flex-1">
-        <Canvas camera={{ position: [3, 3, 3] }}>
-          <ambientLight intensity={0.6} />
-          <directionalLight position={[5, 5, 5]} />
-          <mesh>
-            <boxGeometry />
-            <meshStandardMaterial color="#60a5fa" />
-          </mesh>
-          <OrbitControls />
-        </Canvas>
-      </main>
+    <div className="h-full w-full">
+      <Layout />
+      <FileDialogs />
+      <AboutDialog />
+      <Toaster />
     </div>
   );
 }
