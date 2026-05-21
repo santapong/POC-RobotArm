@@ -1,4 +1,4 @@
-.PHONY: help install install-rtb install-all install-kali test test-rtb smoke smoke-ui uat sim lint clean
+.PHONY: help install install-rtb install-all install-kali test test-rtb smoke smoke-ui uat sim lint clean server web web-build web-typecheck
 
 PYTHON ?= python
 
@@ -16,6 +16,10 @@ help:
 	@echo "  sim          - launch the interactive simulator with Panda"
 	@echo "  lint         - ruff check"
 	@echo "  clean        - remove build/test artifacts"
+	@echo "  server       - run FastAPI dev server (python -m server)"
+	@echo "  web          - run Vite dev server (pnpm dev)"
+	@echo "  web-build    - production web build"
+	@echo "  web-typecheck - TypeScript no-emit type check"
 
 install:
 	$(PYTHON) -m pip install -e .[sim,dev]
@@ -69,3 +73,15 @@ lint:
 clean:
 	rm -rf build dist *.egg-info .pytest_cache __pycache__ artifacts/*.png artifacts/*.ppm
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+server:
+	$(PYTHON) -m server
+
+web:
+	pnpm --dir web dev
+
+web-build:
+	pnpm --dir web build
+
+web-typecheck:
+	pnpm --dir web typecheck

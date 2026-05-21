@@ -14,3 +14,9 @@ examples/*.mod
 examples/*.src
 examples/*.dat
 examples/*.script
+
+# Web (Phase 0)
+web/node_modules
+web/dist
+web/.vite
+web/coverage

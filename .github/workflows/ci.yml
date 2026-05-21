@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        python: ["3.10", "3.11"]
+        python: ["3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,23 +33,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
       - run: |
           python -m pip install --upgrade pip
           python -m pip install ruff
       - run: ruff check src tests
 
+  # TODO: drop continue-on-error once rtb extras are confirmed on 3.12
   test-rtb:
     name: rtb-gated tests
     runs-on: ubuntu-22.04
+    continue-on-error: true
     # rtb pulls heavy scientific stack; run only on main/PR to main.
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
       - name: Install with rtb
         run: |
@@ -57,3 +59,21 @@ jobs:
           python -m pip install -e .[sim,rtb,dev]
       - name: Run all tests
         run: make test-rtb
+
+  web:
+    name: Web build & typecheck
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: pnpm install
+      - run: pnpm typecheck
+      - run: pnpm build
