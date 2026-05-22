@@ -160,6 +160,10 @@ async def create_plan(
         )
 
     # Lazily create PlanningRuntime.
+    # Contract: PlanningRuntime requires session.sim_runtime (Phase 1 design).
+    # The 503 PLANNING_NOT_INITIALIZED fires when the client tries to plan
+    # before spawning a robot.  This matches the program-run endpoint which
+    # also requires sim_runtime and raises the same error code.
     if session.planning_runtime is None:
         if session.sim_runtime is None:
             raise http_error(
