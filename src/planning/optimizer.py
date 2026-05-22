@@ -141,13 +141,13 @@ class DrakeOptimizer(TrajectoryOptimizer):
             # SNOPT may not be available; let Solve pick a default solver.
             pass
 
-        # Seed control points by linearly interpolating between input waypoints.
-        seed = np.zeros((dof, n_ctrl))
-        for i in range(n_ctrl):
-            u = i / max(1, n_ctrl - 1)
-            seed[:, i] = pts[0] + u * (pts[-1] - pts[0])
-        trajopt.SetInitialGuess(trajopt.ReconstructTrajectory(seed.flatten()))
-
+        # We deliberately do not call ``SetInitialGuess`` here — Drake's
+        # ``KinematicTrajectoryOptimization`` initialises control points to
+        # zero and the start/goal position constraints together with the
+        # path-position constraints we added above shape the solution.
+        # Constructing a ``BsplineTrajectory`` from a hand-rolled seed
+        # matrix is brittle across Drake minor versions; we accept slightly
+        # slower convergence for portability.
         cancel.raise_if_cancelled()
 
         result = Solve(prog)
