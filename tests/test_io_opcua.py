@@ -146,7 +146,7 @@ def test_write_readonly_node_yields_protocol_error() -> None:
             addr = f"i={node_id.Identifier}"
             sig = SignalSpec(name="readonly_flag", kind=SignalKind.DIGITAL_OUT, address=addr)
 
-            with pytest.raises(IoProtocolError):
+            with pytest.raises(IoProtocolError, match="BadUserAccessDenied"):
                 await adapter.write(sig, True)
 
             await adapter.disconnect()

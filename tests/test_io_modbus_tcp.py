@@ -199,19 +199,6 @@ def test_connect_wrong_port_raises_connection_error_in_under_2s() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_write_analog_to_digital_raises_kind_mismatch() -> None:
-    """Writing float to digital_out raises IoSignalKindMismatch (risk #11).
-
-    IoRuntime._check_kind_match is the enforcement point.
-    Test directly via _check_kind_match to confirm adapter-level safety.
-    """
-    from src.io.runtime import _check_kind_match
-
-    digital_sig = SignalSpec(name="do0", kind=SignalKind.DIGITAL_OUT, address="coil:0")
-    with pytest.raises(IoSignalKindMismatch):
-        _check_kind_match(digital_sig, 1.5)  # float to digital_out
-
-
 def test_write_analog_to_digital_via_runtime_raises_kind_mismatch() -> None:
     """Full-path test: IoRuntime.write float to digital_out raises IoSignalKindMismatch."""
     import src.io.runtime as _runtime_mod

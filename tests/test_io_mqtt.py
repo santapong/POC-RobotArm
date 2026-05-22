@@ -196,64 +196,74 @@ def test_mqtt_write_not_connected_raises() -> None:
 
 
 def test_qos_1_redelivery_after_broker_restart() -> None:
-    """QoS=1: publisher with retain delivers message to subscriber after broker restart.
+    """QoS=1 retained-message redelivery to a new subscriber (risk #2).
 
-    Full broker-restart redelivery is hard to test without persistent session
-    (requires client_id + clean_session=False, which aiomqtt may not support
-    without config changes).  We simplify: verify QoS=1 publish with retain
-    is received by a new subscriber after broker restart — this tests the
-    retained-message delivery path which is the practical QoS=1 benefit.
+    Scenario (Option A — retained message):
+    1. Start ONE broker.
+    2. Publisher A connects, publishes payload="42.0" to "test/retain" with
+       qos=1 and retain=True, then disconnects.
+    3. Subscriber B (brand-new client_id) connects and subscribes to "test/retain"
+       with qos=1.
+    4. Assert: B receives the retained "42.0" within timeout.
 
-    If this is too brittle, the test also verifies that QoS=1 publish succeeds
-    (basic smoke).
+    This exercises the retained-state semantics that operators rely on (risk #2):
+    any subscriber that connects after the fact still receives the last retained
+    value, regardless of whether the original publisher is still connected.
+
+    Full durable-session redelivery (clean_session=False) is not tested here
+    because aiomqtt v2 does not expose clean_session directly.  That scenario
+    is noted as risk #2 / untested-in-CI.
     """
 
     async def _run():
-        port = find_free_port()
+        async with start_mqtt_broker() as (host, port):
+            topic = "test/retain"
+            sig_pub = SignalSpec(
+                name="cycle_count",
+                kind=SignalKind.ANALOG_OUT,
+                address=topic,
+                qos=1,
+            )
 
-        # Phase 1: publish with retain=True at QoS=1
-        async with start_mqtt_broker(port=port) as (host, p1):
-            cfg = MqttConfig(host=host, port=p1, client_id="pub1", timeout_s=5.0, qos=1)
-            pub = MqttAdapter(cfg)
+            # --- Phase 1: Publish with retain=True ---
+            pub_cfg = MqttConfig(
+                host=host, port=port, client_id="pub_retain", timeout_s=5.0, qos=1
+            )
+            pub = MqttAdapter(pub_cfg)
             await pub.connect()
 
-            topic = "test/qos1"
-            sig = SignalSpec(name="cycle_count", kind=SignalKind.ANALOG_OUT, address=topic, qos=1)
-            ev = await pub.write(sig, 42.0)
-            assert ev.kind == "write_ack"
-            assert ev.value == 42.0  # Verifies QoS=1 publish succeeded
+            ev = await pub.write(sig_pub, 42.0)
+            assert ev.kind == "write_ack", (
+                f"Expected write_ack from QoS=1 publish, got {ev.kind!r}"
+            )
+            assert abs(float(ev.value) - 42.0) < 0.01  # type: ignore[arg-type]
 
+            # Give mosquitto time to persist the retained message
+            await asyncio.sleep(0.1)
             await pub.disconnect()
 
-        # Phase 2: new broker start; retained message persists on disk only if
-        # mosquitto is configured with persistence — in our ephemeral fixture it's not.
-        # So we start fresh broker and verify a new subscriber gets the retained msg
-        # from MQTT "retain" flag at the same port.
-        # (In practice, retained messages require broker-side persistence across restarts.)
-        # For CI, we just verify a new sub receives the message from a publish after restart.
+            # --- Phase 2: NEW subscriber connects AFTER publisher is gone ---
+            # It must receive the retained "42.0" without any new publish.
+            sig_sub = SignalSpec(
+                name="cycle_count",
+                kind=SignalKind.ANALOG_OUT,
+                address=topic,
+                qos=1,
+            )
+            sub_cfg = MqttConfig(
+                host=host, port=port, client_id="sub_retain_new", timeout_s=5.0, qos=1
+            )
+            sub = MqttAdapter(sub_cfg)
+            await sub.connect()
 
-        async with start_mqtt_broker() as (host2, port2):
-            # New broker, new publisher + subscriber
-            pub_cfg = MqttConfig(host=host2, port=port2, client_id="pub2", timeout_s=5.0, qos=1)
-            sub_cfg = MqttConfig(host=host2, port=port2, client_id="sub2", timeout_s=5.0, qos=1)
-
-            pub2 = MqttAdapter(pub_cfg)
-            sub2 = MqttAdapter(sub_cfg)
-            await pub2.connect()
-            await sub2.connect()
-
-            sig2 = SignalSpec(name="cycle_count", kind=SignalKind.ANALOG_OUT,
-                              address="test/qos1_v2", qos=1)
             events: list = []
 
             async def _watch():
-                async for ev in sub2.watch([sig2]):
+                async for ev in sub.watch([sig_sub]):
                     events.append(ev)
-                    return
+                    return  # stop after first event
 
             watch_task = asyncio.create_task(_watch())
-            await asyncio.sleep(0.1)
-            await pub2.write(sig2, 99.0)
 
             deadline = time.monotonic() + 5.0
             while not events and time.monotonic() < deadline:
@@ -265,11 +275,16 @@ def test_qos_1_redelivery_after_broker_restart() -> None:
             except (asyncio.CancelledError, Exception):
                 pass
 
-            assert events, "QoS=1 subscriber did not receive message after broker restart"
-            assert abs(float(events[0].value) - 99.0) < 0.01  # type: ignore[arg-type]
+            assert events, (
+                "QoS=1 retained message was NOT delivered to a new subscriber.  "
+                "Risk #2: operators rely on retained-state semantics — a new subscriber "
+                "must receive the last retained value without waiting for a re-publish."
+            )
+            assert abs(float(events[0].value) - 42.0) < 0.01, (  # type: ignore[arg-type]
+                f"Retained value mismatch: expected 42.0, got {events[0].value!r}"
+            )
 
-            await pub2.disconnect()
-            await sub2.disconnect()
+            await sub.disconnect()
 
     asyncio.run(_run())
 

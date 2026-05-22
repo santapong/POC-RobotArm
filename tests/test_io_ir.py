@@ -153,18 +153,15 @@ def test_set_signal_invalid_value_type_raises():
 
 
 def test_set_signal_nan_value_raises():
-    """NaN float is a non-finite numeric — should raise ValueError."""
-    # The validator checks isinstance(value, (bool, int, float)); NaN is float
-    # so it passes the type check. Record behaviour: if it passes, it passes;
-    # if the spec is tightened, this test will be the canary.
-    # Per §F: "must be bool / int / float" — NaN is float.
-    # We assert the object is constructed (NaN passes the type check).
-    try:
-        s = SetSignal(connection="c", signal="s", value=float("nan"))
-        # If it succeeds, value must be a float
-        assert math.isnan(s.value)  # type: ignore[arg-type]
-    except ValueError:
-        pass  # also acceptable
+    """NaN float passes the isinstance check (NaN is float); the object is accepted.
+
+    The validator checks ``isinstance(value, (bool, int, float))``; NaN satisfies
+    that check.  We lock the observed behaviour: SetSignal(value=nan) succeeds
+    and s.value is math.nan.  If the implementation later tightens this to
+    reject non-finite floats, change this to pytest.raises(ValueError).
+    """
+    s = SetSignal(connection="c", signal="s", value=float("nan"))
+    assert math.isnan(s.value)  # type: ignore[arg-type]
 
 
 def test_set_signal_frozen():
@@ -488,22 +485,64 @@ def _io_prog():
 
 
 def test_abb_rapid_emits_something_with_io_steps():
-    """RAPIDPost.emit() on a program with IO steps returns a non-empty string (not TypeError)."""
+    """RAPIDPost.emit() on a program with IO steps returns a non-empty string (not TypeError).
+
+    The no-op branch must emit each IO step type as a RAPID comment (``! <type>: ...``),
+    proving the post-processor recognised the type rather than raising TypeError.
+    """
     from src.post import RAPIDPost
     source = RAPIDPost().emit(_io_prog())
     assert isinstance(source, str)
     assert len(source) > 0
+    # The no-op comment prefix for RAPID is "! <ClassName>: "
+    assert "! SetSignal:" in source, (
+        f"Expected RAPID no-op comment '! SetSignal:' in source; got:\n{source}"
+    )
+    assert "! WaitSignal:" in source, (
+        f"Expected RAPID no-op comment '! WaitSignal:' in source; got:\n{source}"
+    )
+    assert "! IfSignal:" in source, (
+        f"Expected RAPID no-op comment '! IfSignal:' in source; got:\n{source}"
+    )
 
 
 def test_kuka_krl_emits_something_with_io_steps():
+    """KRLPost.emit() on a program with IO steps returns a non-empty string.
+
+    The no-op branch must emit each IO step type as a KRL comment (``; <type>: ...``).
+    """
     from src.post import KRLPost
     source = KRLPost().emit(_io_prog())
     assert isinstance(source, str)
     assert len(source) > 0
+    # The no-op comment prefix for KRL is "; <ClassName>: "
+    assert "; SetSignal:" in source, (
+        f"Expected KRL no-op comment '; SetSignal:' in source; got:\n{source}"
+    )
+    assert "; WaitSignal:" in source, (
+        f"Expected KRL no-op comment '; WaitSignal:' in source; got:\n{source}"
+    )
+    assert "; IfSignal:" in source, (
+        f"Expected KRL no-op comment '; IfSignal:' in source; got:\n{source}"
+    )
 
 
 def test_ur_script_emits_something_with_io_steps():
+    """URScriptPost.emit() on a program with IO steps returns a non-empty string.
+
+    The no-op branch must emit each IO step type as a URScript comment (``# <type>: ...``).
+    """
     from src.post import URScriptPost
     source = URScriptPost().emit(_io_prog())
     assert isinstance(source, str)
     assert len(source) > 0
+    # The no-op comment prefix for URScript is "# <ClassName>: "
+    assert "# SetSignal:" in source, (
+        f"Expected URScript no-op comment '# SetSignal:' in source; got:\n{source}"
+    )
+    assert "# WaitSignal:" in source, (
+        f"Expected URScript no-op comment '# WaitSignal:' in source; got:\n{source}"
+    )
+    assert "# IfSignal:" in source, (
+        f"Expected URScript no-op comment '# IfSignal:' in source; got:\n{source}"
+    )

@@ -551,6 +551,9 @@ def test_stop_run_cancels_wait_signal():
                 record = _wait_for_run(c, run_id, timeout_s=5.0)
 
     assert record["status"] == "failed", f"Expected failed after stop, got: {record}"
+    assert "RUN_CANCELLED" in record.get("error", ""), (
+        f"Expected RUN_CANCELLED in error, got: {record.get('error')!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -681,4 +684,151 @@ def test_unknown_connection_yields_io_error_in_run():
                 record = _wait_for_run(c, run_id, timeout_s=10.0)
 
     assert record["status"] == "failed"
-    assert record.get("error") is not None
+    assert "IO_CONNECTION_UNKNOWN" in (record.get("error") or ""), (
+        f"Expected IO_CONNECTION_UNKNOWN in error, got: {record.get('error')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# MUST-FIX (iter-2): test_per_move_bridge_idle_wait
+# Verifies _wait_for_bridge_idle in server/routers/programs.py:53 is exercised
+# by a mixed [Move, SetSignal, Move] program on the linear step-by-step path.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingBridge:
+    """Wrapper around a real bridge that records the call timeline.
+
+    We record three event kinds:
+      ("start", n_waypoints, ts) — start_trajectory was called
+      ("idle_query", active, ts) — trajectory_status was queried; active=False means idle
+      ("submit", None, ts)       — bridge.submit was called (to run _play_inner)
+      ("cancel", None, ts)       — cancel_trajectory was called
+
+    After the run completes we walk the timeline to assert ordering:
+      second start_trajectory called AFTER at least one idle_query that returned False.
+
+    IMPORTANT: The SimRuntime tick loop calls ``self.bridge.tick()`` on every iteration.
+    This wrapper must therefore expose ``tick``, ``snapshot``, and any other method the
+    SimRuntime background task uses, delegating them all to the real bridge.
+    """
+
+    def __init__(self, real_bridge):
+        self._real = real_bridge
+        self.timeline: list[tuple] = []
+
+    # --- SimRuntime tick loop methods (must delegate) ---
+
+    def tick(self, max_commands: int = 32) -> int:
+        """Delegate to the real bridge tick so the command queue is drained normally."""
+        return self._real.tick(max_commands)
+
+    def snapshot(self) -> dict:
+        return self._real.snapshot()
+
+    # --- Instrumented trajectory methods ---
+
+    def start_trajectory(self, waypoints: list, dwell_s: float) -> None:
+        self.timeline.append(("start", len(waypoints), time.monotonic()))
+        self._real.start_trajectory(waypoints, dwell_s)
+
+    def trajectory_status(self) -> dict:
+        status = self._real.trajectory_status()
+        self.timeline.append(("idle_query", status.get("active", False), time.monotonic()))
+        return status
+
+    def cancel_trajectory(self) -> None:
+        self.timeline.append(("cancel", None, time.monotonic()))
+        self._real.cancel_trajectory()
+
+    def submit(self, fn, timeout: float = 5.0):
+        # Submit must still go through the real bridge (it drives PyBullet).
+        self.timeline.append(("submit", None, time.monotonic()))
+        return self._real.submit(fn, timeout)
+
+
+def test_per_move_bridge_idle_wait():
+    """A program with Move→SetSignal→Move exercises _wait_for_bridge_idle between moves.
+
+    The second start_trajectory must be called AFTER the bridge became idle
+    (trajectory_status()["active"] == False) following the first start_trajectory.
+
+    Approach:
+    - Build a program [Move, SetSignal, Move] so the step-by-step (IO) path fires.
+    - Wrap the sim_runtime.bridge with _RecordingBridge to record timestamps.
+    - After the run, walk the timeline and assert:
+        second "start" event ts > last "idle_query(active=False)" ts
+        that came after the first "start" event.
+    """
+    stub_io = _StubIoRuntime()
+    stub_io.add_slot("mb", "do0", SignalKind.DIGITAL_OUT)
+
+    # Build a [Move, SetSignal, Move] program.
+    prog = _make_program("idle_wait_prog",
+        _abs_j(),                                           # Move 1
+        SetSignal(connection="mb", signal="do0", value=True),  # IO step (forces step-by-step path)
+        _abs_j(q=(0.1, 0.0, 0.0, 0.0, 0.0, 0.0)),         # Move 2
+    )
+
+    recording_bridge: list[_RecordingBridge] = []  # mutable container for closure
+
+    with _app_with_robot() as c:
+        # Get access to the session so we can inject the recording bridge.
+        from server.services.session import get_session
+        session = get_session()
+
+        # Wrap the bridge BEFORE running the program.
+        assert session.sim_runtime is not None, "sim_runtime must be set after robot spawn"
+        rb = _RecordingBridge(session.sim_runtime.bridge)
+        session.sim_runtime.bridge = rb
+        recording_bridge.append(rb)
+
+        with _register_program(prog):
+            with _inject_io_runtime(c, stub_io):
+                r = c.post("/api/programs/idle_wait_prog/run", json={"planner": "linear"})
+                assert r.status_code == 200
+                run_id = r.json()["run_id"]
+                record = _wait_for_run(c, run_id, timeout_s=30.0)
+
+        # Restore the real bridge after the run.
+        session.sim_runtime.bridge = rb._real
+
+    assert record["status"] == "completed", (
+        f"Expected completed, got: {record['status']}: {record.get('error')}"
+    )
+
+    rb = recording_bridge[0]
+    timeline = rb.timeline
+
+    # Extract the timestamps of "start" events and idle "idle_query" events.
+    starts = [(ts, n) for kind, n, ts in timeline if kind == "start"]
+    idle_queries_false = [(ts,) for kind, active, ts in timeline if kind == "idle_query" and not active]
+
+    # We need at least 2 start calls (one for each Move batch).
+    assert len(starts) >= 2, (
+        f"Expected at least 2 start_trajectory calls for Move+SetSignal+Move program; "
+        f"got {len(starts)}: {starts}"
+    )
+
+    first_start_ts = starts[0][0]
+    second_start_ts = starts[1][0]
+
+    # Find at least one idle_query(active=False) that:
+    #   - happened AFTER the first start_trajectory
+    #   - happened BEFORE the second start_trajectory
+    idle_between = [
+        (ts,) for (ts,) in idle_queries_false
+        if first_start_ts < ts < second_start_ts
+    ]
+
+    assert len(idle_between) >= 1, (
+        f"Expected at least one idle_query(active=False) between first and second "
+        f"start_trajectory calls.\n"
+        f"First start ts: {first_start_ts:.4f}\n"
+        f"Second start ts: {second_start_ts:.4f}\n"
+        f"All idle_query(False) timestamps: {[ts for (ts,) in idle_queries_false]}\n"
+        f"Full timeline:\n" +
+        "\n".join(f"  {k} active={a} ts={t:.4f}" if k == "idle_query"
+                  else f"  {k} n={a} ts={t:.4f}"
+                  for k, a, t in timeline)
+    )

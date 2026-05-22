@@ -40,7 +40,7 @@ def _io_exc_to_code(exc: Exception) -> str:
         io_errors.IoSignalKindMismatch: "IO_SIGNAL_KIND_MISMATCH",
         io_errors.IoUnknownSignal: "IO_SIGNAL_UNKNOWN",
         io_errors.IoProtocolError: "IO_PROTOCOL_ERROR",
-        io_errors.IoConnectionError: "IO_CONNECTION_ERROR",
+        io_errors.IoConnectionError: "IO_CONNECTION_FAILED",
     }
     for cls, code in mapping.items():
         if isinstance(exc, cls):

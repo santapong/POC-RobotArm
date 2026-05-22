@@ -610,6 +610,71 @@ def test_multiple_connections_listed():
     assert "conn_b" in names
 
 
+# Should-fix #1: IO_BAD_CONFIG 422 path — domain __post_init__ rejects empty host
+def test_create_connection_422_io_bad_config_from_domain():
+    """POST with a config that passes Pydantic but fails domain __post_init__ returns 422 IO_BAD_CONFIG.
+
+    ModbusTcpConfigModel has ``host: str`` with no min_length constraint, so empty-string
+    host passes Pydantic validation.  The domain dataclass ModbusTcpConfig.__post_init__
+    raises ValueError('ModbusTcpConfig.host must not be empty'), which _config_to_domain
+    catches and re-raises as http_error(422, "IO_BAD_CONFIG", ...).
+    """
+    app = create_app()
+    body = {
+        "name": "bad_domain",
+        "config": {
+            "protocol": "modbus_tcp",
+            "host": "",  # passes Pydantic (no min_length), fails domain __post_init__
+            "port": 502,
+            "unit_id": 1,
+            "timeout_s": 2.0,
+        },
+        "signals": [],
+    }
+    with TestClient(app) as c:
+        r = c.post("/api/io/connections", json=body)
+    assert r.status_code == 422, f"Expected 422, got {r.status_code}: {r.text}"
+    assert r.json()["code"] == "IO_BAD_CONFIG", (
+        f"Expected IO_BAD_CONFIG, got: {r.json()!r}"
+    )
+
+
+# Should-fix #8: update_signals 422 IO_SIGNAL_KIND_MISMATCH coverage
+def test_update_signals_422_kind_mismatch(monkeypatch):
+    """PUT /api/io/connections/{name}/signals raises 422 IO_SIGNAL_KIND_MISMATCH
+    when the runtime raises IoSignalKindMismatch.
+
+    The real IoRuntime.update_signals doesn't raise this error (it just replaces the
+    signal map), so we monkeypatch it to simulate a kind-mismatch path. This locks the
+    router's error-mapping code: the 422+IO_SIGNAL_KIND_MISMATCH response must be wired
+    through the except IoSignalKindMismatch branch in server/routers/io.py:update_signals.
+    """
+    from src.io.errors import IoSignalKindMismatch
+
+    async def _raise_kind_mismatch(name, signals):
+        raise IoSignalKindMismatch("analog_in signal cannot be written as digital_out")
+
+    app = create_app()
+    with _patch_build_adapter():
+        with TestClient(app) as c:
+            c.post("/api/io/connections", json=_create_body("km_update_conn"))
+
+            # Monkeypatch after the runtime is created (it's inside the session).
+            from server.services.session import get_session
+            session = get_session()
+            assert session.io_runtime is not None
+            monkeypatch.setattr(session.io_runtime, "update_signals", _raise_kind_mismatch)
+
+            r = c.put(
+                "/api/io/connections/km_update_conn/signals",
+                json=[_DIGITAL_OUT_SIGNAL],
+            )
+    assert r.status_code == 422, f"Expected 422, got {r.status_code}: {r.text}"
+    assert r.json()["code"] == "IO_SIGNAL_KIND_MISMATCH", (
+        f"Expected IO_SIGNAL_KIND_MISMATCH, got: {r.json()!r}"
+    )
+
+
 # Extra coverage: disconnect endpoint preserves slot
 def test_disconnect_endpoint_preserves_slot():
     """POST /api/io/connections/{name}/reconnect (via disconnect + reconnect pattern)

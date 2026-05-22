@@ -579,12 +579,37 @@ def test_unsubscribe_stops_delivery() -> None:
 
 
 def test_subscribe_duplicate_not_added_twice() -> None:
+    """Subscribing the same queue twice must deliver each event exactly once (risk: dedup).
+
+    Behavioural assertion: subscribe q twice, publish one event, assert q.qsize() == 1.
+    This proves the subscribers list deduplicates without touching private state.
+    """
+
     async def _run():
-        rt = IoRuntime()
+        rt, adapter = await _make_runtime_with_stub("c1", [_make_signal("di0")])
+
         q: asyncio.Queue = asyncio.Queue()
         rt.subscribe(q)
-        rt.subscribe(q)
-        assert rt._subscribers.count(q) == 1
+        rt.subscribe(q)  # second subscribe must be a no-op
+
+        # Inject one event through the watch loop so _publish is called exactly once.
+        ev = IoEvent(connection="stub", kind="value_changed", signal="di0", value=True)
+        await adapter.event_queue.put(ev)
+
+        # Wait for the event to propagate.
+        deadline = time.monotonic() + 2.0
+        while q.empty() and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+
+        # Exactly one item in the queue — not two (which would happen if q were
+        # registered twice).
+        assert q.qsize() == 1, (
+            f"Expected exactly 1 event in subscriber queue after dedup subscribe, "
+            f"got {q.qsize()}.  The duplicate subscribe was not suppressed."
+        )
+
+        rt.unsubscribe(q)
+        await rt.stop()
 
     asyncio.run(_run())
 

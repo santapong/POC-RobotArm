@@ -81,11 +81,20 @@ def test_rtu_connect_write_read_coil_round_trip() -> None:
 
 
 def test_baud_mismatch_returns_corrupted_data() -> None:
-    """Baud mismatch: received value must NOT equal written value (risk #6).
+    """Baud mismatch: either an error is raised OR the read-back value is corrupted (risk #6).
 
-    The server runs at 9600; client connects at 115200.  Framing errors cause
-    corrupted responses.  We assert that the read-back value does NOT equal
-    the value we wrote.  We CANNOT assert a clean failure — that's the risk.
+    The server runs at 9600 baud; the client connects at 115200 — an intentional mismatch.
+    Framing errors typically cause one of two outcomes:
+      * the read raises an exception (timeout, CRC error, protocol error) — acceptable, and
+      * the read succeeds but returns data that does NOT equal the written value — the
+        silent-garbage scenario this test documents.
+
+    If the read somehow returns the exact written value through the mismatched channel,
+    the test fails with a clear message: the baud-mismatch protection is not working.
+
+    Note: this test gates on pymodbus + pty and skips on Windows.  Sandbox environments
+    where the pty sim itself fails to start will see an ImportError from the sim before
+    reaching the assertion; that is counted as an error, not a pass.
     """
 
     async def _run():
@@ -109,7 +118,7 @@ def test_baud_mismatch_returns_corrupted_data() -> None:
                     await adapter.connect()
                     connected = True
                 except (IoConnectionError, Exception):
-                    # Connection itself may fail on severe mismatch — that satisfies the risk too
+                    # Connection itself may fail on severe mismatch — that satisfies risk #6
                     pass
 
                 if connected:
@@ -133,14 +142,16 @@ def test_baud_mismatch_returns_corrupted_data() -> None:
             except Exception:
                 pass
 
-            # Either we got an error (acceptable) OR the data doesn't match (the risk scenario).
-            # If we somehow got clean data back, the test documents it rather than fails.
-            if read_succeeded and received is not None:
-                # Assert that received != written is the intent, but we cannot be deterministic.
-                # The test documents the observation for the auditor.
-                # If data DID match, that means pty echoed data (unlikely) — warn but don't fail.
-                # Risk #6 says we CANNOT assert clean failure, so we just assert something was received.
-                assert received is not None or not read_succeeded
+            # Risk #6: baud mismatch produces undefined behaviour — either the read
+            # raises an error (acceptable), OR the read succeeds with corrupted data
+            # (which is the silent-garbage bug we're documenting).
+            if read_succeeded:
+                assert received != written_value, (
+                    f"BUG: expected baud mismatch to corrupt data, but got clean read of "
+                    f"{written_value!r}.  The mismatched baud rate did not produce any "
+                    f"observable corruption — risk #6 is NOT covered."
+                )
+            # else: read errored — also acceptable (some pymodbus versions surface this)
 
     asyncio.run(_run())
 
