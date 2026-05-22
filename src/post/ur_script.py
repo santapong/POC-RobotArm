@@ -37,6 +37,7 @@ from io import StringIO
 
 from src.motion.ir import (
     Comment,
+    IfSignal,
     IOKind,
     IOOp,
     JointTarget,
@@ -45,9 +46,11 @@ from src.motion.ir import (
     PoseTarget,
     Procedure,
     Program,
+    SetSignal,
     SpeedData,
     ToolData,
     Wait,
+    WaitSignal,
     WObjData,
     ZoneData,
     ZoneKind,
@@ -284,6 +287,9 @@ def _walk_procedure(proc: Procedure) -> list[str]:
         elif isinstance(step, Comment):
             for raw in step.text.splitlines() or [""]:
                 lines.append(f"# {raw}")
+        elif isinstance(step, (SetSignal, WaitSignal, IfSignal)):
+            # I/O step types are runtime-resolved; URScript emission is a future phase.
+            lines.append(f"# {type(step).__name__}: {step}")
         else:  # pragma: no cover - IR validates step types
             raise TypeError(f"Unknown procedure step: {type(step).__name__}")
     return lines

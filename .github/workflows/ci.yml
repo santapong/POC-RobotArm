@@ -112,3 +112,24 @@ jobs:
         run: make test-planning
         env:
           PLANNING_E2E: "0"
+
+  test-io:
+    name: I/O tests
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (sim + io + dev)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y mosquitto
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[sim,io,dev]"
+      - name: Run io tests
+        run: make test-io
+        env:
+          IO_E2E: "0"

@@ -113,6 +113,17 @@ class IOKind(str, Enum):
     WAIT_LOW = "WAIT_LOW"
 
 
+class SignalOp(str, Enum):
+    """Comparison operator for WaitSignal / IfSignal."""
+
+    EQ = "EQ"
+    NEQ = "NEQ"
+    GT = "GT"
+    GTE = "GTE"
+    LT = "LT"
+    LTE = "LTE"
+
+
 # ---------------------------------------------------------------------------
 # Tool / Workobject / Speed / Zone / Config
 # ---------------------------------------------------------------------------
@@ -381,7 +392,90 @@ class Comment:
     text: str
 
 
-ProcedureStep = Union[Move, IOOp, Wait, Comment]
+@dataclass(frozen=True)
+class SetSignal:
+    """Write a value to an I/O signal.
+
+    Both ``connection`` and ``signal`` must be non-empty strings. ``value``
+    must be ``bool``, ``int``, or ``float``.
+    """
+
+    connection: str
+    signal: str
+    value: Union[bool, int, float]
+
+    def __post_init__(self) -> None:
+        if not self.connection:
+            raise ValueError("SetSignal.connection must not be empty")
+        if not self.signal:
+            raise ValueError("SetSignal.signal must not be empty")
+        if not isinstance(self.value, (bool, int, float)):
+            raise ValueError("SetSignal.value must be bool / int / float")
+
+
+@dataclass(frozen=True)
+class WaitSignal:
+    """Block until ``signal <op> value`` becomes true, or timeout.
+
+    ``timeout_s=None`` means block until the program is cancelled (no
+    step-level cap). When set, ``timeout_s`` must be > 0.
+    """
+
+    connection: str
+    signal: str
+    op: SignalOp
+    value: Union[bool, int, float]
+    timeout_s: Optional[float] = None  # None = block forever (program-level cancel only)
+
+    def __post_init__(self) -> None:
+        if not self.connection:
+            raise ValueError("WaitSignal.connection must not be empty")
+        if not self.signal:
+            raise ValueError("WaitSignal.signal must not be empty")
+        if not isinstance(self.op, SignalOp):
+            object.__setattr__(self, "op", SignalOp(self.op))
+        if not isinstance(self.value, (bool, int, float)):
+            raise ValueError("WaitSignal.value must be bool / int / float")
+        if self.timeout_s is not None and self.timeout_s <= 0.0:
+            raise ValueError("WaitSignal.timeout_s must be > 0 when set")
+
+
+@dataclass(frozen=True)
+class IfSignal:
+    """Branch on a signal comparison.
+
+    ``then_body`` is executed when ``signal <op> value`` is true; ``else_body``
+    otherwise. Both bodies default to empty tuples (no-op branch).
+    """
+
+    connection: str
+    signal: str
+    op: SignalOp
+    value: Union[bool, int, float]
+    then_body: tuple["ProcedureStep", ...] = ()
+    else_body: tuple["ProcedureStep", ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.connection:
+            raise ValueError("IfSignal.connection must not be empty")
+        if not self.signal:
+            raise ValueError("IfSignal.signal must not be empty")
+        if not isinstance(self.op, SignalOp):
+            object.__setattr__(self, "op", SignalOp(self.op))
+        if not isinstance(self.value, (bool, int, float)):
+            raise ValueError("IfSignal.value must be bool / int / float")
+        object.__setattr__(self, "then_body", tuple(self.then_body))
+        object.__setattr__(self, "else_body", tuple(self.else_body))
+        for body_name, body in (("then_body", self.then_body), ("else_body", self.else_body)):
+            for i, sub in enumerate(body):
+                if not isinstance(sub, (Move, IOOp, Wait, Comment, SetSignal, WaitSignal, IfSignal)):
+                    raise ValueError(
+                        f"IfSignal.{body_name}[{i}] is not a ProcedureStep:"
+                        f" {type(sub).__name__}"
+                    )
+
+
+ProcedureStep = Union[Move, IOOp, Wait, Comment, SetSignal, WaitSignal, IfSignal]
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +498,7 @@ class Procedure:
         object.__setattr__(self, "params", tuple(self.params))
         object.__setattr__(self, "body", tuple(self.body))
         for i, step in enumerate(self.body):
-            if not isinstance(step, (Move, IOOp, Wait, Comment)):
+            if not isinstance(step, (Move, IOOp, Wait, Comment, SetSignal, WaitSignal, IfSignal)):
                 raise ValueError(f"Procedure.body[{i}] is not a ProcedureStep: {type(step).__name__}")
 
 
@@ -449,6 +543,9 @@ _TYPE_REGISTRY: dict[str, type] = {
     "IOOp": IOOp,
     "Wait": Wait,
     "Comment": Comment,
+    "SetSignal": SetSignal,
+    "WaitSignal": WaitSignal,
+    "IfSignal": IfSignal,
     "Procedure": Procedure,
     "Program": Program,
 }
@@ -560,6 +657,12 @@ def load(path: str) -> Program:
     return obj
 
 
+# Convenience aliases for callers that prefer the encode/decode naming
+# convention (e.g. server-side round-trip helpers).
+encode_program = to_dict
+decode_program = from_dict
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -570,6 +673,7 @@ __all__ = [
     "ConfigData",
     "IOKind",
     "IOOp",
+    "IfSignal",
     "JointTarget",
     "Move",
     "MoveKind",
@@ -578,15 +682,20 @@ __all__ = [
     "ProcedureStep",
     "Program",
     "QUAT_NORM_TOL",
+    "SetSignal",
+    "SignalOp",
     "SpeedData",
     "ToolData",
     "WObjData",
     "Wait",
+    "WaitSignal",
     "ZoneData",
     "ZoneKind",
     "canonicalise_quat",
     "check_quat",
+    "decode_program",
     "dump",
+    "encode_program",
     "from_dict",
     "load",
     "to_dict",
