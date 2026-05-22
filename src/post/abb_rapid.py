@@ -37,6 +37,7 @@ from typing import Optional
 from src.motion.ir import (
     Comment,
     ConfigData,
+    IfSignal,
     IOKind,
     IOOp,
     JointTarget,
@@ -45,9 +46,11 @@ from src.motion.ir import (
     PoseTarget,
     Procedure,
     Program,
+    SetSignal,
     SpeedData,
     ToolData,
     Wait,
+    WaitSignal,
     WObjData,
     ZoneData,
     ZoneKind,
@@ -357,6 +360,9 @@ def _walk_procedure(proc: Procedure, decls: _Decls) -> list[str]:
         elif isinstance(step, Comment):
             for raw_line in step.text.splitlines() or [""]:
                 lines.append(f"! {raw_line}")
+        elif isinstance(step, (SetSignal, WaitSignal, IfSignal)):
+            # I/O step types are runtime-resolved; RAPID emission is a future phase.
+            lines.append(f"! {type(step).__name__}: {step}")
         else:  # pragma: no cover - IR validates step types upstream
             raise TypeError(f"Unknown procedure step: {type(step).__name__}")
     return lines

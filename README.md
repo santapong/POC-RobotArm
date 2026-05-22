@@ -1,23 +1,52 @@
 # POC-RobotArm
 
-A virtual robot station + CAM toolpath planner + multi-vendor program export, built around PyBullet and a vendor-neutral motion IR. Think of it as a small open-source slice of RobotStudio + Robotmaster, all running as a desktop program (no website).
+Hybrid monorepo for a virtual robot station, with motion / sim / vision / planning extensions and a web-based 3D operator UI.
 
-## What you can do
+## Architecture at a glance
 
-- Run a 3D PyBullet simulator for **Panda**, **UR5**, **KUKA IIWA**, or **ABB IRB 1200**, controlled by sliders or by the LLM
-- Solve forward / inverse kinematics from Python or the CLI
-- Talk to the arm in natural language (real Ollama or the bundled deterministic fake)
-- Build a virtual **station** with frames, tools, workpieces, fixtures, IO; import CAD (STL/OBJ/DXF); save/load to JSON
-- Generate **CAM-style toolpaths** from CAD (raster, polyline-follow, curve-on-surface) with redundancy-DP joint optimization and PyBullet collision checks
-- Build a vendor-neutral motion program and **export ABB RAPID, KUKA KRL, or Universal Robots URScript**
-- Compute **time-parameterised trajectories** from any program (trapezoidal velocity profile, IK-seeded continuity, MOVE_J / MOVE_L / MOVE_C) with per-sample joint-velocity, TCP-velocity, and singularity checks
-- Replay interpolated trajectories through the PyBullet bridge via **`SimSampledPathDriver`**, a drop-in proxy for the standard sim driver
-- Drive a real **ABB controller online via RWS** (HTTPS digest auth, IRC5 / OmniCore — no extra deps)
-- **Record** any sequence of moves and **replay** them through the same `Driver` Protocol that talks to the sim or to a real robot
-- Launch the **PySide6 desktop UI** (`robotarm-station`) to manage stations, preview emitted code, and spawn the PyBullet viewport
-- Run the full UAT acceptance harness: `make uat`
+The project is organised as three siblings that share a single Python process at runtime.
 
-## Install
+```
+src/      Python library (motion IR, sim, drivers, post-processors)
+server/   FastAPI app exposing the library to the web UI
+web/      React + Vite + R3F frontend (replacing the legacy PySide6 desktop)
+```
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full architecture reference (process model, subsystems, session state, error contract, WebSocket taxonomy, IR types).
+
+## Phased roadmap
+
+- **Phase 0 — Foundation** (this commit): Python 3.12 floor, FastAPI skeleton (`GET /health`, `WebSocket /ws/telemetry` stub), Vite + React + R3F scaffold with placeholder canvas, Makefile targets `make server` / `make web`, README rewrite.
+- **Phase 1 — Web parity**: FastAPI session state, WebSocket telemetry, REST endpoints; React 3D viewport with URDF loader, outliner, code-preview, and jog panel. (planned)
+- **Phase 2 — Vision pipeline**: `src/vision/` with OpenCV capture, YOLOv11 detection, hand-eye calibration; MJPEG stream endpoint; web camera panel. (planned)
+- **Phase 3 — Advanced planning**: `src/planning/` with OMPL / pyroboplan, Ruckig, ToppRA; plan service in FastAPI; web plan-preview panel. (planned)
+- **Phase 4 — I/O signals** ✅: `src/io/` with Modbus TCP/RTU, OPC-UA, MQTT adapters behind a common `IoAdapter` ABC; FastAPI REST + WebSocket stream; React I/O tab with signal map editor; IR step types `SetSignal` / `WaitSignal` / `IfSignal` integrated with the program executor.
+- **Phase 5 — SO-101 driver + LeRobot + Docker**: SO-101 FeetechMotorsBus driver, MuJoCo backend for RL, web jog/teleop panel, first Docker image. (planned)
+- **Phase 6 — RL research track**: `src/learning/` with Stable-Baselines3 baseline and LeRobot ACT/Diffusion Policy; HF dataset adapter; inference endpoint. (planned)
+
+Full plan: `.claude/plans/can-you-create-an-sparkling-garden.md`.
+
+## Run the app
+
+### Server
+
+```bash
+pip install -e .[server,dev]
+make server     # FastAPI on http://127.0.0.1:8000
+curl http://127.0.0.1:8000/health   # -> {"status":"ok"}
+```
+
+### Web
+
+Requires Node 20 and pnpm 10.
+
+```bash
+cd web
+pnpm install
+make web        # Vite on http://localhost:5173
+```
+
+## Python install matrix
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -38,9 +67,30 @@ pip install -e .[sim,rtb,cam,ui,dev]
 pip install -e .[all,dev]
 ```
 
-Tested on Ubuntu 22.04 with Python 3.10 / 3.11. Other Linux distros should work; macOS / Windows are not part of the UAT scope (see `docs/UAT_CHECKLIST.md`).
+Tested on Ubuntu 22.04 with Python 3.12. Other Linux distros should work; macOS / Windows are not part of the UAT scope (see `docs/UAT_CHECKLIST.md`).
 
-## Quickstart
+## Core Python Library
+
+### What you can do
+
+- Run a 3D PyBullet simulator for **Panda**, **UR5**, **KUKA IIWA**, or **ABB IRB 1200**, controlled by sliders or by the LLM
+- Solve forward / inverse kinematics from Python or the CLI
+- Talk to the arm in natural language (real Ollama or the bundled deterministic fake)
+- Build a virtual **station** with frames, tools, workpieces, fixtures, IO; import CAD (STL/OBJ/DXF); save/load to JSON
+- Generate **CAM-style toolpaths** from CAD (raster, polyline-follow, curve-on-surface) with redundancy-DP joint optimization and PyBullet collision checks
+- Build a vendor-neutral motion program and **export ABB RAPID, KUKA KRL, or Universal Robots URScript**
+- Compute **time-parameterised trajectories** from any program (trapezoidal velocity profile, IK-seeded continuity, MOVE_J / MOVE_L / MOVE_C) with per-sample joint-velocity, TCP-velocity, and singularity checks
+- Replay interpolated trajectories through the PyBullet bridge via **`SimSampledPathDriver`**, a drop-in proxy for the standard sim driver
+- Drive a real **ABB controller online via RWS** (HTTPS digest auth, IRC5 / OmniCore — no extra deps)
+- **Record** any sequence of moves and **replay** them through the same `Driver` Protocol that talks to the sim or to a real robot
+- Launch the **PySide6 desktop UI** (`robotarm-station`) to manage stations, preview emitted code, and spawn the PyBullet viewport
+- Run the full UAT acceptance harness: `make uat`
+
+### Install
+
+See the [Python install matrix](#python-install-matrix) above.
+
+### Quickstart
 
 ```bash
 make sim                                 # interactive simulator (Panda)
@@ -52,7 +102,7 @@ make test                                # 31 headless tests
 RUN_GUI_TESTS=1 pytest tests/test_gui_smoke.py     # opens GUI, saves PNG
 ```
 
-## Talk to the arm
+### Talk to the arm
 
 ```bash
 python -m src.main --sim                 # real Ollama + 3D simulator
@@ -74,7 +124,7 @@ sim joint <idx> <deg>         Drive a single joint
 sim reset                     Return to the catalog home pose
 ```
 
-## Architecture
+### Architecture
 
 ```
 src/
@@ -122,7 +172,7 @@ src/
 ├── station/                  # Virtual station scene graph
 │   ├── scene.py              # Frame/Tool/Workpiece/Fixture/IO + JSON I/O
 │   └── cad_import.py         # trimesh + ezdxf wrappers
-└── ui/                       # PySide6 desktop UI
+└── ui/                       # PySide6 desktop UI (deprecated — kept until web parity, then removed)
     ├── app.py                # StationMainWindow (File/Robot/Run menus)
     ├── outliner.py           # QTreeWidget showing scene contents
     ├── code_panel.py         # Emitted-code preview
@@ -259,7 +309,7 @@ Errors come back as JSON with a code and message:
 - `SIM_TIMEOUT` — GUI loop didn't drain in time
 - `INVALID_ARG` — bad joint index or wrong DOF count
 
-## UAT readiness
+### UAT readiness
 
 This branch is the UAT-readiness sprint. Status:
 
@@ -274,6 +324,97 @@ This branch is the UAT-readiness sprint. Status:
 - 🔄 M9 — Path interpolator + `SimSampledPathDriver` + post-processor acceleration emission (PRs #4, #5 — not yet merged to main)
 
 See `docs/UAT_CHECKLIST.md` for the tester checklist and `docs/UAT_REPORT_TEMPLATE.md` for the signoff form.
+
+## Industrial I/O (Phase 4)
+
+The `src/io/` package connects programs running in the executor to physical hardware over four protocols: Modbus TCP, Modbus RTU, OPC-UA, and MQTT. All four share a single async `IoAdapter` ABC, so the rest of the server treats them identically. See [`docs/IO.md`](docs/IO.md) for the full reference.
+
+### Install the `[io]` extra
+
+```bash
+pip install -e .[io,dev]
+```
+
+This pulls `pymodbus`, `asyncua`, and `aiomqtt`. The core library (`src/io/types.py`, `src/io/adapter.py`) is stdlib-only and always importable; only the concrete adapters require the extra.
+
+### Supported protocols
+
+| Protocol | Library | Default port | Signal kinds |
+|----------|---------|--------------|--------------|
+| Modbus TCP | `pymodbus` | 502 | digital, analog (holding registers) |
+| Modbus RTU | `pymodbus` | serial device | digital, analog (holding registers) |
+| OPC-UA | `asyncua` | 4840 | digital, analog (monitored items) |
+| MQTT | `aiomqtt` | 1883 | digital, analog (topic publish/subscribe) |
+
+Quick config samples:
+
+```python
+from src.io.types import ModbusTcpConfig, OpcUaConfig, MqttConfig
+
+ModbusTcpConfig(host="192.168.1.10", port=502, unit_id=1)
+OpcUaConfig(url="opc.tcp://plc.local:4840/", namespace=2)
+MqttConfig(host="broker.local", port=1883, qos=1)
+```
+
+### REST endpoints
+
+All routes are under `/api/io/`. Full request/response shapes are in [`docs/IO.md`](docs/IO.md#rest-endpoints).
+
+- **Connection management** — `POST /connections`, `GET /connections`, `GET /connections/{name}`, `DELETE /connections/{name}`, `POST /connections/{name}/reconnect`, `PUT /connections/{name}/signals`
+- **Signal I/O** — `POST /connections/{name}/signals/{signal}/read` (live read), `POST /connections/{name}/signals/{signal}/write`
+- **Cached values** — `GET /values` (all connections), `GET /connections/{name}/values`
+
+### WebSocket stream
+
+Connect to `ws://localhost:8000/ws/io/stream` to receive every `IoEvent` in real time. To filter to one connection, send:
+
+```json
+{"subscribe": "connection/<name>"}
+```
+
+Send `{"subscribe": ""}` to revert to all connections. Each frame carries `type`, `connection`, `signal`, `value`, `status`, and `monotonic_s` fields.
+
+### IR program steps
+
+`SetSignal`, `WaitSignal`, and `IfSignal` extend the program IR (`src/motion/ir.py`) so that motion programs can interact with hardware signals without leaving the executor:
+
+```python
+from src.motion.ir import (
+    SetSignal, WaitSignal, IfSignal, SignalOp,
+    Procedure, Program,
+)
+
+Program(
+    name="pick",
+    procedures=(
+        Procedure(name="main", body=(
+            # Block until the start button is pressed (10 s timeout).
+            WaitSignal(connection="plc", signal="start_btn", op=SignalOp.EQ,
+                       value=True, timeout_s=10.0),
+            # Branch: pick if a part is present, skip otherwise.
+            IfSignal(connection="plc", signal="part_present", op=SignalOp.EQ,
+                     value=True,
+                     then_body=(move_pick, move_drop),
+                     else_body=()),
+            # Acknowledge completion.
+            SetSignal(connection="plc", signal="done_lamp", value=True),
+        )),
+    ),
+)
+```
+
+The executor calls `IoRuntime.write` for `SetSignal`, `IoRuntime.wait_for_signal` for `WaitSignal`, and `IoRuntime.read` + branch dispatch for `IfSignal`. If `io_runtime` is `None` when an I/O step is reached, the run fails immediately with `IO_NOT_INITIALIZED`.
+
+### Run the demo
+
+The Phase 4 exit gate (`tests/test_io_e2e_demo.py::test_io_e2e_full_scenario`) starts in-process Modbus TCP and OPC-UA simulators plus a real `mosquitto` broker, registers three connections, runs an I/O-bearing program, and asserts the WebSocket stream carries `connection_changed` and `write_ack` frames.
+
+```bash
+# Prerequisites: pip install -e .[io,dev] && which mosquitto
+IO_E2E=1 pytest tests/test_io_e2e_demo.py -v
+```
+
+The test is opt-in and is not run by `make test` or `make uat` by default.
 
 ## Troubleshooting
 

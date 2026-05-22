@@ -6,13 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "poc-robotarm"
 version = "0.3.0"
 description = "Virtual robot station with CAM toolpaths and multi-vendor program export (RAPID/KRL/URScript)"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 authors = [{name = "POC-RobotArm contributors"}]
 readme = "README.md"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Operating System :: POSIX :: Linux",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
@@ -47,21 +46,61 @@ cam = [
     "trimesh>=4.0",
     "ezdxf>=1.0",
 ]
+vision = [
+    "opencv-contrib-python>=4.10",
+    "numpy>=1.24,<2.0",
+    "Pillow>=10.0",
+]
+vision-ml = ["ultralytics>=8.3"]
+planning = [
+    "ompl>=2.0.0",
+    "drake>=1.53",
+    "toppra @ git+https://github.com/hungpham2511/toppra@develop#subdirectory=python",
+    "numpy<2",
+]
+learning = []
+io = [
+    # pymodbus 3.13 removed `ModbusSlaveContext` (used by simulators);
+    # pin <3.13 until simulators are migrated to ModbusDeviceContext.
+    "pymodbus>=3.7,<3.13",
+    "asyncua>=1.1,<2",
+    "aiomqtt>=2.3,<3",
+]
+server = [
+    "fastapi>=0.110",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+    "uvicorn[standard]>=0.27",
+    "websockets>=12",
+]
 dev = [
     "pytest>=7.0",
     "ruff>=0.5",
 ]
 all = [
+    "aiomqtt>=2.3,<3",
+    "asyncua>=1.1,<2",
+    "drake>=1.53",
+    "ezdxf>=1.0",
+    "fastapi>=0.110",
+    "httpx>=0.27",
+    "matplotlib>=3.7.0",
+    "numpy<2",
+    "ollama>=0.4.0",
+    "ompl>=2.0.0",
+    "opencv-contrib-python>=4.10",
+    "Pillow>=10.0",
+    "pymodbus>=3.7,<3.13",
+    "python-multipart>=0.0.9",
     "pybullet>=3.2.5",
+    "PySide6>=6.5",
     "roboticstoolbox-python>=1.1.0",
     "scipy>=1.10.0",
     "spatialmath-python>=1.1.0",
-    "matplotlib>=3.7.0",
-    "ollama>=0.4.0",
-    "Pillow>=10.0",
-    "PySide6>=6.5",
+    "toppra @ git+https://github.com/hungpham2511/toppra@develop#subdirectory=python",
     "trimesh>=4.0",
-    "ezdxf>=1.0",
+    "uvicorn[standard]>=0.27",
+    "websockets>=12",
 ]
 
 [project.scripts]
@@ -71,7 +110,7 @@ robotarm-station = "src.ui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["src*"]
+include = ["src*", "server*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.urdf", "*.md", "assets/**/*"]
@@ -79,12 +118,15 @@ include = ["src*"]
 [tool.pytest.ini_options]
 markers = [
     "gui: tests that require a real GUI (skipped unless RUN_GUI_TESTS=1)",
+    "vision: tests that require opencv-contrib-python",
+    "planning: tests that require the [planning] extra (ompl + drake + toppra)",
+    "io: tests that require the [io] extra (pymodbus + asyncua + aiomqtt; some require mosquitto)",
 ]
 testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

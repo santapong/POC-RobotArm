@@ -1,4 +1,4 @@
-.PHONY: help install install-rtb install-all install-kali test test-rtb smoke smoke-ui uat sim lint clean
+.PHONY: help install install-rtb install-all install-kali test test-rtb test-server test-vision test-planning test-io smoke smoke-ui uat sim lint clean server web web-build web-typecheck
 
 PYTHON ?= python
 
@@ -10,12 +10,20 @@ help:
 	@echo "  install-kali - apt-install Qt+OpenGL libs, then [sim,rtb,cam,ui,dev] (see docs/UAT_KALI.md)"
 	@echo "  test         - run headless tests (no rtb required)"
 	@echo "  test-rtb     - run all tests including rtb-gated ones"
+	@echo "  test-server  - run FastAPI endpoint + websocket tests"
+	@echo "  test-vision  - run vision tests (requires [vision] extra)"
+	@echo "  test-planning - run planning tests (requires [planning] extra)"
+	@echo "  test-io      - run I/O tests (requires [io] extra + mosquitto)"
 	@echo "  smoke        - run PyBullet GUI smoke test (opens a real window)"
 	@echo "  smoke-ui     - run PySide6 UI smoke test under offscreen Qt"
 	@echo "  uat          - run scripts/uat_run.py (UAT acceptance harness)"
 	@echo "  sim          - launch the interactive simulator with Panda"
 	@echo "  lint         - ruff check"
 	@echo "  clean        - remove build/test artifacts"
+	@echo "  server       - run FastAPI dev server (python -m server)"
+	@echo "  web          - run Vite dev server (pnpm dev)"
+	@echo "  web-build    - production web build"
+	@echo "  web-typecheck - TypeScript no-emit type check"
 
 install:
 	$(PYTHON) -m pip install -e .[sim,dev]
@@ -51,6 +59,18 @@ test:
 test-rtb:
 	$(PYTHON) -m pytest -q
 
+test-server:
+	$(PYTHON) -m pytest tests/test_station_endpoints.py tests/test_robots_endpoints.py tests/test_programs_endpoints.py tests/test_assets_endpoints.py tests/test_ws_telemetry.py -q
+
+test-vision:
+	$(PYTHON) -m pytest tests/test_vision_*.py -q
+
+test-planning:
+	$(PYTHON) -m pytest tests/test_planning_*.py -q
+
+test-io:
+	$(PYTHON) -m pytest tests/test_io_*.py -q
+
 smoke:
 	RUN_GUI_TESTS=1 $(PYTHON) -m pytest tests/test_gui_smoke.py -v
 
@@ -69,3 +89,15 @@ lint:
 clean:
 	rm -rf build dist *.egg-info .pytest_cache __pycache__ artifacts/*.png artifacts/*.ppm
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+
+server:
+	$(PYTHON) -m server
+
+web:
+	pnpm --dir web dev
+
+web-build:
+	pnpm --dir web build
+
+web-typecheck:
+	pnpm --dir web typecheck

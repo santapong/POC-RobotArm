@@ -5,7 +5,7 @@ setup(
     version="0.1.0",
     description="Robotics Kinematics Solver with LLM Interface",
     packages=find_packages(),
-    python_requires=">=3.10",
+    python_requires=">=3.12",
     install_requires=[
         "roboticstoolbox-python>=1.1.0",
         "numpy>=1.24.0",

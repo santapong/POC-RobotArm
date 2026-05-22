@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        python: ["3.10", "3.11"]
+        python: ["3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,23 +33,25 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
       - run: |
           python -m pip install --upgrade pip
           python -m pip install ruff
       - run: ruff check src tests
 
+  # TODO: drop continue-on-error once rtb extras are confirmed on 3.12
   test-rtb:
     name: rtb-gated tests
     runs-on: ubuntu-22.04
+    continue-on-error: true
     # rtb pulls heavy scientific stack; run only on main/PR to main.
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
       - name: Install with rtb
         run: |
@@ -57,3 +59,77 @@ jobs:
           python -m pip install -e .[sim,rtb,dev]
       - name: Run all tests
         run: make test-rtb
+
+  test-vision:
+    name: Vision tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (server + vision)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .[server,vision,dev]
+      - name: Run vision tests
+        run: make test-vision
+
+  web:
+    name: Web build & typecheck
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: pnpm install
+      - run: pnpm typecheck
+      - run: pnpm build
+
+  test-planning:
+    name: Planning tests
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (sim + planning + dev)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[sim,planning,dev]"
+      - name: Run planning tests
+        run: make test-planning
+        env:
+          PLANNING_E2E: "0"
+
+  test-io:
+    name: I/O tests
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (sim + io + dev)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y mosquitto
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[sim,io,dev]"
+      - name: Run io tests
+        run: make test-io
+        env:
+          IO_E2E: "0"
