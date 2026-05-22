@@ -135,6 +135,20 @@ export const useIoStore = create<IoStoreState>()(
               }
             }
 
+            // Surface error events in the connection card's last_error field.
+            if (event.type === "error") {
+              const existing = nextConns[event.connection];
+              if (existing !== undefined) {
+                nextConns = {
+                  ...nextConns,
+                  [event.connection]: {
+                    ...existing,
+                    last_error: event.error_message ?? null,
+                  },
+                };
+              }
+            }
+
             // Also update write_ack into lastValues.
             if (
               event.type === "write_ack" &&

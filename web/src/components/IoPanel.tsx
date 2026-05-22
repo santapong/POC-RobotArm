@@ -58,6 +58,7 @@ export function IoPanel(): JSX.Element {
   const connections = useIoStore((s) => s.connections);
   const selectedConnection = useIoStore((s) => s.selectedConnection);
   const setConnections = useIoStore((s) => s.setConnections);
+  const setSignalMap = useIoStore((s) => s.setSignalMap);
   const upsertConnection = useIoStore((s) => s.upsertConnection);
   const removeConnectionFromStore = useIoStore((s) => s.removeConnection);
   const selectConnection = useIoStore((s) => s.selectConnection);
@@ -73,6 +74,7 @@ export function IoPanel(): JSX.Element {
         const next: ReturnType<typeof useIoStore.getState>["connections"] = {};
         for (const conn of list) {
           next[conn.name] = conn;
+          setSignalMap(conn.name, conn.signals);
         }
         setConnections(next);
       })
@@ -204,7 +206,10 @@ export function IoPanel(): JSX.Element {
 
         {/* Signal map editor for selected connection */}
         {selectedConnection !== null && (
-          <SignalMapEditor connectionName={selectedConnection} />
+          <SignalMapEditor
+            key={selectedConnection}
+            connectionName={selectedConnection}
+          />
         )}
       </div>
 

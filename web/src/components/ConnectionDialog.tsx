@@ -5,6 +5,10 @@
  * calls POST /api/io/connections and upserts the result into the store.
  * When the server returns IO_UNAVAILABLE the caller is notified so the host
  * can disable the create button for the session.
+ *
+ * Phase 4 limitation: there is no edit/PATCH endpoint. To change a
+ * connection's configuration, the operator must Remove the existing connection
+ * and Add a new one with the desired settings.
  */
 
 import { useState } from "react";

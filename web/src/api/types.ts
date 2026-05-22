@@ -603,6 +603,12 @@ export interface WriteSignalRequest {
   value: IoValueModel;
 }
 
+export interface IoConnectionCreateRequest {
+  name: string;
+  config: ConnectionConfigModel;
+  signals: SignalSpecModel[];
+}
+
 export interface WriteSignalResponse {
   connection: string;
   signal: string;

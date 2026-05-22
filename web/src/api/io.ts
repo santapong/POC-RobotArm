@@ -8,22 +8,14 @@
 import { get, post, del, request } from "./client";
 import type {
   IoConnectionStatusModel,
+  IoConnectionCreateRequest,
   SignalSpecModel,
   IoValueSnapshotModel,
   WriteSignalRequest,
   WriteSignalResponse,
-  ConnectionConfigModel,
 } from "./types";
 
-// ---------------------------------------------------------------------------
-// Request shapes
-// ---------------------------------------------------------------------------
-
-export interface IoConnectionCreateRequest {
-  name: string;
-  config: ConnectionConfigModel;
-  signals: SignalSpecModel[];
-}
+export type { IoConnectionCreateRequest };
 
 // ---------------------------------------------------------------------------
 // Connections
