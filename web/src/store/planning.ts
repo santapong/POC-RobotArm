@@ -127,12 +127,21 @@ export const usePlanningStore = create<PlanningState>()(
           set((state) => {
             const existing = state.plans[frame.plan_id];
             if (!existing) return state;
+            // Synchronously update status when a terminal stage arrives so the
+            // UI reflects the outcome in the ~ms gap before the REST refetch
+            // resolves.
+            const nextStatus: PlanRunRecord["status"] =
+              frame.stage === "completed" ? "completed"
+              : frame.stage === "failed" ? "failed"
+              : frame.stage === "cancelled" ? "cancelled"
+              : existing.status;
             return {
               plans: {
                 ...state.plans,
                 [frame.plan_id]: {
                   ...existing,
                   stage: frame.stage,
+                  status: nextStatus,
                 },
               },
             };

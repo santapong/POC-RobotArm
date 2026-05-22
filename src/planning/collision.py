@@ -25,13 +25,17 @@ Notes
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Callable, Sequence
 
 from src.planning.scene import SceneSnapshot
 from src.planning.types import PlanningUnavailable
+
+_LOG = logging.getLogger(__name__)
 
 # Sentinel telling the worker loop to shut down cleanly.
 _SHUTDOWN = object()
@@ -136,6 +140,22 @@ class CollisionChecker:
                 inner.close()
             except Exception:  # noqa: BLE001
                 pass
+            # Drain any pending envelopes so callers don't block forever
+            # waiting on a Future the worker will never set (worker crash
+            # or unexpected exit).
+            while True:
+                try:
+                    leftover = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if leftover is _SHUTDOWN:
+                    continue
+                assert isinstance(leftover, tuple)
+                _, _, fut = leftover
+                if not fut.done():
+                    fut.set_exception(
+                        RuntimeError("CollisionChecker worker exited unexpectedly")
+                    )
 
     # ------------------------------------------------------------------
     # Public API
@@ -163,7 +183,17 @@ class CollisionChecker:
         q_tuple = tuple(float(v) for v in q)
         self._queue.put((q_tuple, float(clearance_m), fut))
         # 5s is generous; one query against a 6-DOF arm is normally << 5 ms.
-        return bool(fut.result(timeout=5.0))
+        # If the worker is hung we treat the query as a collision so OMPL
+        # aborts the candidate rather than busy-looping on more queries.
+        try:
+            return bool(fut.result(timeout=5.0))
+        except FuturesTimeoutError:
+            _LOG.warning(
+                "CollisionChecker.is_collision timed out after 5s for robot=%s; "
+                "treating as collision",
+                self._scene.robot_id,
+            )
+            return True
 
     def make_validity_fn(self) -> Callable[[Sequence[float]], bool]:
         """Return a callable suitable for OMPL ``StateValidityCheckerFn``.

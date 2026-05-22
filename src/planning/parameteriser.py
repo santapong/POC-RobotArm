@@ -166,7 +166,7 @@ class ToppRAParameteriser(TimeParameteriser):
             # TOPP-RA returns None when it cannot honour the constraints —
             # typical cause is a path through a singular configuration.
             # See risk #10. We try to flag the offending waypoint index.
-            hint = self._near_singular_indices(pts, vmax, amax)
+            hint = self._high_velocity_segments(pts, vmax, amax)
             raise PlanLimitsExceeded(
                 "TOPP-RA could not parameterise the path under the requested "
                 "joint velocity/acceleration limits",
@@ -233,18 +233,23 @@ class ToppRAParameteriser(TimeParameteriser):
         )
 
     @staticmethod
-    def _near_singular_indices(
+    def _high_velocity_segments(
         pts: np.ndarray,
         vmax: np.ndarray,
         amax: np.ndarray,
     ) -> tuple[int, ...]:
-        """Best-effort flag for path indices that look near-singular.
+        """Flag waypoint indices with large joint-space discontinuities.
 
-        We have no Jacobian access here — the optimiser owns the
-        ``MultibodyPlant``. As a fallback, we flag waypoint indices where
-        the local secant velocity (in joint space) would exceed ``vmax``
-        if the path were traversed in a single timestep; that's a useful
-        heuristic for the planner to try a different seed.
+        Heuristic for paths with large joint discontinuities, not actual
+        kinematic singularities — we have no Jacobian access here (the
+        optimiser owns the ``MultibodyPlant``). We flag waypoint indices
+        where the local secant velocity (in joint space) would exceed
+        ``vmax`` if the path were traversed in a single timestep; this is
+        a useful hint for the planner to try a different seed even though
+        the underlying cause may not be a true singularity. The returned
+        indices are surfaced through ``PlanLimitsExceeded.singularity_hint``
+        for wire-contract compatibility; the field name there is retained
+        for now and documented as a heuristic in :mod:`src.planning.types`.
         """
         if pts.shape[0] < 2:
             return ()

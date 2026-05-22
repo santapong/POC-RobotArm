@@ -18,6 +18,20 @@ const STAGE_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+// Stage-based heuristic is intentional: the server heartbeat publishes
+// percent=0.5 for every in-progress plan regardless of true progress,
+// so using frame.percent would cause the bar to jump back on each frame.
+const STAGE_PERCENT: Record<string, number> = {
+  queued: 0,
+  ik: 10,
+  sampling: 30,
+  optimizing: 70,
+  parameterising: 85,
+  completed: 100,
+  failed: 100,
+  cancelled: 100,
+};
+
 export function PlanProgress(): JSX.Element | null {
   const activePlanId = usePlanningStore((s) => s.activePlanId);
   const plans = usePlanningStore((s) => s.plans);
@@ -26,19 +40,6 @@ export function PlanProgress(): JSX.Element | null {
 
   const record = plans[activePlanId];
   if (!record) return null;
-
-  // Progress frames update stage; use a simple stage-to-percent heuristic
-  // when no explicit percent is available (server may not yet have sent one).
-  const STAGE_PERCENT: Record<string, number> = {
-    queued: 0,
-    ik: 10,
-    sampling: 30,
-    optimizing: 70,
-    parameterising: 85,
-    completed: 100,
-    failed: 100,
-    cancelled: 100,
-  };
 
   const pct = STAGE_PERCENT[record.stage] ?? 0;
   const label = STAGE_LABELS[record.stage] ?? record.stage;

@@ -64,7 +64,8 @@ export function PlannerConfigDialog({ open, onOpenChange }: PlannerConfigDialogP
       setQddScale(storeConfig.parameteriser.qdd_scale);
       setGridPoints(storeConfig.parameteriser.grid_points);
     }
-  }, [open, storeConfig]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   function handleSave() {
     const plannerPatch: Partial<PlannerConfigModel> = {

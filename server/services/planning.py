@@ -29,6 +29,7 @@ import asyncio
 import collections
 import concurrent.futures
 import hashlib
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -111,6 +112,9 @@ class _PlanRunRecord:
     result: Optional["PlanResult"]
     created_at: float
     finished_at: Optional[float]
+    # Tracks the most recent progress percent reported by the pipeline.
+    # The heartbeat loop reads this so it doesn't flicker back to a stale value.
+    last_percent: float = 0.0
     _request_model: object = field(default=None, repr=False)  # PlanRequestModel cache
 
 
@@ -140,6 +144,11 @@ class PlanningRuntime:
         self._plan_cache: collections.OrderedDict[str, "TimedTrajectory"] = (
             collections.OrderedDict()
         )
+        # threading.Lock guards _plan_cache against the race between the
+        # worker-thread write path (_plan_blocking) and the event-loop read
+        # path (plan()).  The lock is cheap: contention only occurs on
+        # cache-hit/miss boundaries, not in steady state.
+        self._plan_cache_lock: threading.Lock = threading.Lock()
         self.executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=2)
         self.loop = asyncio.get_running_loop()
 
@@ -250,8 +259,10 @@ class PlanningRuntime:
         def _progress_cb(stage: "_PlannerStage", pct: float) -> None:
             stage_model = PlanStageModel(stage.value)
             self._thread_publish_progress(plan_id, stage_model, pct)
-            # Update the record's stage for heartbeat reporting.
+            # Update the record's stage and last_percent so the heartbeat
+            # loop reports the most recent real progress, not a stale value.
             record.stage = stage_model
+            record.last_percent = pct
 
         try:
             station = self._station_provider()
@@ -293,13 +304,15 @@ class PlanningRuntime:
             if result.status == _PlanStatus.COMPLETED:
                 record.status = PlanStatusModel.COMPLETED
                 record.stage = PlanStageModel.COMPLETED
-                # Store in plan cache.
+                # Store in plan cache (lock guards against the event-loop read
+                # path racing the popitem/setitem sequence here).
                 try:
                     fp = self._scene_plan_fingerprint(req)
                     if result.trajectory is not None:
-                        if len(self._plan_cache) >= _PLAN_CACHE_CAP:
-                            self._plan_cache.popitem(last=False)
-                        self._plan_cache[fp] = result.trajectory
+                        with self._plan_cache_lock:
+                            if len(self._plan_cache) >= _PLAN_CACHE_CAP:
+                                self._plan_cache.popitem(last=False)
+                            self._plan_cache[fp] = result.trajectory
                 except Exception:  # noqa: BLE001
                     pass
             elif result.status == _PlanStatus.CANCELLED:
@@ -376,10 +389,14 @@ class PlanningRuntime:
         # Cache lookup before dispatching to worker.
         try:
             fp = self._scene_plan_fingerprint(req)
-            if fp in self._plan_cache:
-                cached_traj = self._plan_cache[fp]
-                # Move to end (LRU recency).
-                self._plan_cache.move_to_end(fp)
+            # Lock guards the fp-in-dict / dict[fp] / move_to_end sequence
+            # against a concurrent worker-thread popitem/setitem on the same key.
+            with self._plan_cache_lock:
+                cache_hit = fp in self._plan_cache
+                cached_traj = self._plan_cache[fp] if cache_hit else None
+                if cache_hit:
+                    self._plan_cache.move_to_end(fp)
+            if cache_hit:
                 from src.planning.types import PlannerStage, PlanResult, PlanStatus
 
                 record.result = PlanResult(
@@ -501,7 +518,10 @@ class PlanningRuntime:
                 self._publish_progress(
                     record.plan_id,
                     record.stage,
-                    0.5,  # indeterminate progress during heartbeat
+                    # Use the most recent pipeline-reported percent so that
+                    # heartbeat frames never flicker backwards (e.g. from 80%
+                    # back to the former hard-coded 50%).
+                    record.last_percent,
                     eta_s=None,
                 )
 

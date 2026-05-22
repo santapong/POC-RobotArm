@@ -127,6 +127,11 @@ class SceneSnapshot:
         tuple[tuple[float, float, float], tuple[float, float, float]], ...
     ]
     fingerprint: str
+    # Sub-hashes contributed to ``fingerprint`` — exposed via frames_hash() /
+    # fixtures_hash() so server-layer caches can key against finer-grained
+    # invalidation than the full fingerprint. Computed in ``from_station``.
+    _frames_fp: str = ""
+    _fixtures_fp: str = ""
 
     @classmethod
     def from_station(
@@ -202,16 +207,25 @@ class SceneSnapshot:
             # supplies them via a future API. The collision wrapper uses
             # only mesh_paths today.
 
+        home_q = tuple(float(v) for v in spec.home_q[: spec.dof]) or tuple(
+            0.0 for _ in range(spec.dof)
+        )
+
+        # Compute the frames / fixtures sub-hashes once and feed them into
+        # both the snapshot fields and the top-level fingerprint payload.
+        frames_fp = _frames_hash(station)
+        fixtures_fp = _fixtures_hash(station, obstacle_names)
+
         fingerprint = cls._compute_fingerprint(
             robot_id=robot_id,
             urdf_path=urdf_path,
+            qd_max=qd_max,
             qdd_max=qdd_max,
-            station=station,
-            obstacle_names=obstacle_names,
-        )
-
-        home_q = tuple(float(v) for v in spec.home_q[: spec.dof]) or tuple(
-            0.0 for _ in range(spec.dof)
+            home_q=home_q,
+            ee_link_name=spec.ee_link_name,
+            dof=spec.dof,
+            frames_fp=frames_fp,
+            fixtures_fp=fixtures_fp,
         )
 
         return cls(
@@ -226,24 +240,41 @@ class SceneSnapshot:
             fixture_mesh_paths=tuple(mesh_paths),
             fixture_boxes=tuple(boxes),
             fingerprint=fingerprint,
+            _frames_fp=frames_fp,
+            _fixtures_fp=fixtures_fp,
         )
 
     @staticmethod
     def _compute_fingerprint(
         robot_id: str,
         urdf_path: str,
+        qd_max: tuple[float, ...],
         qdd_max: tuple[float, ...],
-        station: "Station",
-        obstacle_names: tuple[str, ...],
+        home_q: tuple[float, ...],
+        ee_link_name: str | None,
+        dof: int,
+        frames_fp: str,
+        fixtures_fp: str,
     ) -> str:
-        """SHA-1 of the canonical JSON payload (algorithm in design doc)."""
+        """SHA-1 of the canonical JSON payload (algorithm in design doc).
+
+        The payload includes every field the server-side plan cache must
+        invalidate on: robot identity, URDF, frame layout, selected
+        fixtures, per-joint velocity and acceleration limits, home pose,
+        end-effector link name, and DOF. ``sort_keys=True`` is preserved
+        for cross-platform determinism.
+        """
         payload = json.dumps(
             {
                 "robot_id": robot_id,
                 "robot_urdf_path": urdf_path,
-                "frames_hash": _frames_hash(station),
-                "fixtures_hash": _fixtures_hash(station, obstacle_names),
+                "frames_hash": frames_fp,
+                "fixtures_hash": fixtures_fp,
+                "qd_max_rad_s": list(qd_max),
                 "qdd_max_rad_s2": list(qdd_max),
+                "home_q": list(home_q),
+                "ee_link_name": ee_link_name,
+                "dof": int(dof),
             },
             sort_keys=True,
         )
@@ -254,26 +285,12 @@ class SceneSnapshot:
     # ------------------------------------------------------------------
 
     def frames_hash(self) -> str:
-        """SHA-1 of the snapshot's frame contribution. Stable across calls."""
-        # The snapshot has already absorbed the live station's frames into
-        # its fingerprint; we expose them here from the cached top-level
-        # payload by deriving a sub-hash. Cheap to recompute since the
-        # snapshot is immutable.
-        return hashlib.sha1(
-            json.dumps(
-                {"robot_id": self.robot_id, "fingerprint": self.fingerprint},
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()
+        """SHA-1 of the snapshot's frame contribution to the fingerprint."""
+        return self._frames_fp
 
     def fixtures_hash(self) -> str:
         """SHA-1 of the snapshot's selected fixture subset."""
-        return hashlib.sha1(
-            json.dumps(
-                {"fixtures": list(self.fixture_mesh_paths)},
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()
+        return self._fixtures_fp
 
 
 __all__ = ["SceneSnapshot"]

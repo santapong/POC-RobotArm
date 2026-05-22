@@ -7,7 +7,7 @@
  * Right column: TrajectoryPreview scrubber.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,7 +34,7 @@ import type { PlannerKindModel, PlanRequestModel } from "@/api/types";
 // Goal mode type
 // ---------------------------------------------------------------------------
 
-type GoalMode = "current_pose" | "grasp_from_detection" | "manual_joints";
+type GoalMode = "current_q" | "grasp_from_detection" | "manual_joints";
 
 // ---------------------------------------------------------------------------
 // Component
@@ -61,12 +61,27 @@ export function PlanPanel(): JSX.Element {
   const [startJoints, setStartJoints] = useState<number[]>(joints_rad);
 
   // Goal mode
-  const [goalMode, setGoalMode] = useState<GoalMode>("current_pose");
+  const [goalMode, setGoalMode] = useState<GoalMode>("current_q");
 
   // Manual joints goal inputs (one per DOF of startJoints)
   const [manualGoalJoints, setManualGoalJoints] = useState<number[]>(() =>
     joints_rad.map(() => 0),
   );
+
+  // When telemetry first establishes the robot's DOF (joints_rad.length
+  // changes), auto-size startJoints and manualGoalJoints to match so the
+  // user sees populated inputs and avoids a 422 on first Plan click.
+  // Once the arrays are the same length as joints_rad the user's edits are
+  // left untouched.
+  useEffect(() => {
+    if (joints_rad.length === 0) return;
+    setStartJoints((prev) =>
+      prev.length !== joints_rad.length ? [...joints_rad] : prev,
+    );
+    setManualGoalJoints((prev) =>
+      prev.length !== joints_rad.length ? joints_rad.map(() => 0) : prev,
+    );
+  }, [joints_rad.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Obstacle multi-select (all fixture names, user-toggled subset)
   const fixtureNames = station?.fixtures.map((f) => f.name) ?? [];
@@ -106,9 +121,7 @@ export function PlanPanel(): JSX.Element {
       goal_pose_xyz_m = grasp.xyz_m;
       goal_pose_quat_wxyz = grasp.quat_wxyz;
     } else {
-      // current_pose — use the current TCP as goal pose; requires telemetry
-      // to have a valid reading. We fall back to manual_joints if no pose is
-      // available by sending current joints as goal.
+      // current_q — send the current joints as the goal (stay in place).
       goal_q = [...joints_rad];
     }
 
@@ -282,7 +295,7 @@ export function PlanPanel(): JSX.Element {
             <SelectValue placeholder="Goal type" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="current_pose" className="text-xs">Current pose</SelectItem>
+            <SelectItem value="current_q" className="text-xs">Stay at current joints</SelectItem>
             <SelectItem
               value="grasp_from_detection"
               className="text-xs"

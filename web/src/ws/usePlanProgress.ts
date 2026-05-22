@@ -14,8 +14,16 @@
 
 import { useEffect } from "react";
 import useWebSocket from "react-use-websocket";
+import { toast } from "sonner";
+import { getPlan } from "@/api/planning";
 import { usePlanningStore } from "@/store/planning";
 import type { PlanProgressFrame } from "@/api/types";
+
+const TERMINAL_STAGES = new Set<PlanProgressFrame["stage"]>([
+  "completed",
+  "failed",
+  "cancelled",
+]);
 
 const WS_URL =
   typeof window !== "undefined"
@@ -32,7 +40,31 @@ export function usePlanProgress(): void {
     onMessage: (event: MessageEvent) => {
       try {
         const frame = JSON.parse(event.data as string) as PlanProgressFrame;
+        // Read the existing stage before mutating so we can detect the
+        // first time this plan transitions into a terminal stage.
+        const prevStage =
+          usePlanningStore.getState().plans[frame.plan_id]?.stage ?? null;
         usePlanningStore.getState().applyProgress(frame);
+        // Fire a single REST fetch when the plan first enters a terminal stage.
+        // prevStage being non-terminal (or absent) guards against re-firing on
+        // subsequent heartbeat frames that repeat the terminal stage.
+        if (
+          TERMINAL_STAGES.has(frame.stage) &&
+          (prevStage === null || !TERMINAL_STAGES.has(prevStage))
+        ) {
+          getPlan(frame.plan_id).then(
+            (record) => {
+              usePlanningStore.getState().setPlan(record);
+            },
+            (err: unknown) => {
+              toast.error(
+                `Failed to fetch plan result: ${err instanceof Error ? err.message : String(err)}`,
+              );
+              // Optimistic fallback already applied by applyProgress; no
+              // further action needed — the status was synced synchronously.
+            },
+          );
+        }
       } catch {
         // Malformed frame — ignore silently
       }

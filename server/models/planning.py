@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import time
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Annotated, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -121,8 +121,11 @@ class PlanRequestModel(BaseModel):
     robot_id: str
     q_start: list[float] = Field(min_length=1)
     goal_q: Optional[list[float]] = None
-    goal_pose_xyz_m: Optional[list[float]] = None
-    goal_pose_quat_wxyz: Optional[list[float]] = None
+    # Exactly 3 floats required: wrong-length payloads return VALIDATION_ERROR
+    # 422 here (Pydantic) rather than an IndexError 500 inside to_domain().
+    goal_pose_xyz_m: Annotated[Optional[list[float]], Field(min_length=3, max_length=3)] = None
+    # Exactly 4 floats required (w, x, y, z).  Same rationale as above.
+    goal_pose_quat_wxyz: Annotated[Optional[list[float]], Field(min_length=4, max_length=4)] = None
     obstacles: list[str] = []
     planner: PlannerConfigModel = Field(default_factory=PlannerConfigModel)
     optimizer: OptimizerConfigModel = Field(default_factory=OptimizerConfigModel)
@@ -130,6 +133,13 @@ class PlanRequestModel(BaseModel):
 
     @model_validator(mode="after")
     def _exactly_one_goal(self) -> "PlanRequestModel":
+        # Error-taxonomy note (PM decision):
+        # This validator (and Pydantic field-type mismatches) raise
+        # ValidationError -> FastAPI global handler -> 422 VALIDATION_ERROR.
+        # PLANNING_BAD_CONFIG 422 is reserved for downstream ValueError raised
+        # by to_domain() or PlanRequest.__post_init__ (e.g. quat not unit-
+        # normalised, DOF length mismatch) — config that passes Pydantic but
+        # fails inside the planning lib.
         has_q = self.goal_q is not None
         has_pose = (
             self.goal_pose_xyz_m is not None and self.goal_pose_quat_wxyz is not None

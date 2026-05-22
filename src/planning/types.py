@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field, fields, is_dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Sentinels and tolerances
@@ -52,7 +52,7 @@ class PlanningUnavailable(RuntimeError):
 
 
 def _as_float_tuple(
-    value: Any, length: Optional[int] = None, name: str = "value"
+    value: Any, length: int | None = None, name: str = "value"
 ) -> tuple[float, ...]:
     """Coerce a sequence to a tuple of floats; optionally enforce length."""
     if value is None:
