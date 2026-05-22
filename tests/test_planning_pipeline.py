@@ -25,9 +25,13 @@ pytest.importorskip("pybullet")
 from src.planning.budgets import CancelToken, PlanTimeout  # noqa: E402
 from src.planning.collision import CollisionChecker  # noqa: E402
 from src.planning.ik import IKSolver, PlanningIKUnreachable  # noqa: E402
-from src.planning.parameteriser import PlanLimitsExceeded, ToppRAParameteriser  # noqa: E402
+from src.planning.parameteriser import (  # noqa: E402
+    PlanLimitsExceeded,
+    TimeParameteriser,
+    ToppRAParameteriser,
+)
 from src.planning.pipeline import plan  # noqa: E402
-from src.planning.samplers import PlanNoSolution, RRTStarPlanner  # noqa: E402
+from src.planning.samplers import Planner, PlanNoSolution, RRTStarPlanner  # noqa: E402
 from src.planning.scene import SceneSnapshot  # noqa: E402
 from src.planning.types import (  # noqa: E402
     ParameteriserConfig,
@@ -39,6 +43,53 @@ from src.planning.types import (  # noqa: E402
     PlanStatus,
 )
 from src.station.scene import Frame, RobotEntry, Station  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# Minimal ABC stubs — used by the error-mapping tests below.
+# Using concrete subclasses instead of MagicMock keeps duck-typing safe
+# and makes the intent clearer (auditor item #9 / Fix E).
+# ---------------------------------------------------------------------------
+
+
+class _PlanLimitsExceededParameteriser(TimeParameteriser):
+    """Stub that always raises PlanLimitsExceeded."""
+
+    def parameterise(self, scene, waypoints, config, cancel, dt_s=0.01):  # type: ignore[override]
+        raise PlanLimitsExceeded("forced limits exceeded", singularity_hint=(3, 5))
+
+
+class _PlanNoSolutionSampler(Planner):
+    """Stub that always raises PlanNoSolution."""
+
+    kind = PlannerKind.RRT_STAR  # satisfy ABC kind field
+
+    def solve(self, scene, checker, q_start, q_goal, config, cancel, on_progress=None):  # type: ignore[override]
+        raise PlanNoSolution("no path")
+
+
+class _PlanTimeoutSampler(Planner):
+    """Stub that always raises PlanTimeout."""
+
+    kind = PlannerKind.RRT_STAR
+
+    def solve(self, scene, checker, q_start, q_goal, config, cancel, on_progress=None):  # type: ignore[override]
+        raise PlanTimeout("timed out")
+
+
+class _PlanValueErrorSampler(Planner):
+    """Stub that raises ValueError — maps to PLANNING_BAD_CONFIG (Fix E)."""
+
+    kind = PlannerKind.RRT_STAR
+
+    def solve(self, scene, checker, q_start, q_goal, config, cancel, on_progress=None):  # type: ignore[override]
+        raise ValueError("some downstream validation failure")
+
+
+class _IKUnreachableSolver:
+    """Minimal IKSolver stand-in that always raises PlanningIKUnreachable."""
+
+    def solve(self, target_xyz_m, target_quat_wxyz, q_seed=None):
+        raise PlanningIKUnreachable("unreachable")
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -382,15 +433,11 @@ def test_plan_limits_exceeded_maps_to_error_code(
     ur5_checker: CollisionChecker,
     sampler: RRTStarPlanner,
 ) -> None:
-    """PlanLimitsExceeded from parameteriser -> PLANNING_LIMITS_EXCEEDED."""
-    from unittest.mock import MagicMock
+    """PlanLimitsExceeded from parameteriser -> PLANNING_LIMITS_EXCEEDED.
 
-    # Use a mock parameteriser that raises PlanLimitsExceeded
-    mock_parameteriser = MagicMock()
-    mock_parameteriser.parameterise.side_effect = PlanLimitsExceeded(
-        "forced limits exceeded",
-        singularity_hint=(3, 5),
-    )
+    Uses a minimal ABC subclass instead of MagicMock (auditor item #9 / Fix E).
+    """
+    stub_parameteriser = _PlanLimitsExceededParameteriser()
 
     ik = IKSolver(ur5_scene, residual_tol_m=0.02, cache_size=256)
     try:
@@ -409,7 +456,7 @@ def test_plan_limits_exceeded_maps_to_error_code(
             ik=ik,
             sampler=sampler,
             optimizer=None,
-            parameteriser=mock_parameteriser,
+            parameteriser=stub_parameteriser,
             cancel=CancelToken(),
         )
     finally:
@@ -421,20 +468,25 @@ def test_plan_limits_exceeded_maps_to_error_code(
 
 
 # ---------------------------------------------------------------------------
-# PlanNoSolution propagated
+# ValueError maps to PLANNING_BAD_CONFIG — Fix E
 # ---------------------------------------------------------------------------
 
 
-def test_plan_no_solution_maps_to_error_code(
+def test_plan_value_error_maps_to_bad_config(
     ur5_scene: SceneSnapshot,
     ur5_checker: CollisionChecker,
     toppra: ToppRAParameteriser,
 ) -> None:
-    """PlanNoSolution from sampler -> PLANNING_NO_SOLUTION."""
-    from unittest.mock import MagicMock
+    """ValueError from any downstream component -> PLANNING_BAD_CONFIG.
 
-    mock_sampler = MagicMock()
-    mock_sampler.solve.side_effect = PlanNoSolution("no path")
+    Fix E: the pipeline catches downstream ValueError and maps it to
+    error_code='PLANNING_BAD_CONFIG', but no test exercised this path.
+    The architect's spec lists PLANNING_BAD_CONFIG in the error contract.
+
+    We use a minimal Planner subclass that raises ValueError to trigger
+    the mapping — using ABC subclasses rather than MagicMock.
+    """
+    stub_sampler = _PlanValueErrorSampler()
 
     ik = IKSolver(ur5_scene, residual_tol_m=0.02, cache_size=256)
     try:
@@ -451,7 +503,54 @@ def test_plan_no_solution_maps_to_error_code(
             scene=ur5_scene,
             checker=ur5_checker,
             ik=ik,
-            sampler=mock_sampler,
+            sampler=stub_sampler,
+            optimizer=None,
+            parameteriser=toppra,
+            cancel=CancelToken(),
+        )
+    finally:
+        ik.close()
+
+    assert result.status == PlanStatus.FAILED
+    assert result.error_code == "PLANNING_BAD_CONFIG", (
+        f"Expected 'PLANNING_BAD_CONFIG' but got {result.error_code!r}. "
+        "The pipeline.plan() ValueError catch clause must map to this code."
+    )
+    assert result.trajectory is None
+
+
+# ---------------------------------------------------------------------------
+# PlanNoSolution propagated
+# ---------------------------------------------------------------------------
+
+
+def test_plan_no_solution_maps_to_error_code(
+    ur5_scene: SceneSnapshot,
+    ur5_checker: CollisionChecker,
+    toppra: ToppRAParameteriser,
+) -> None:
+    """PlanNoSolution from sampler -> PLANNING_NO_SOLUTION.
+
+    Uses a minimal ABC subclass instead of MagicMock (auditor item #9 / Fix E).
+    """
+    stub_sampler = _PlanNoSolutionSampler()
+
+    ik = IKSolver(ur5_scene, residual_tol_m=0.02, cache_size=256)
+    try:
+        q_start = list(ur5_scene.home_q)
+        q_goal = [q + 0.3 for q in q_start]
+        request = PlanRequest(
+            robot_id="arm0",
+            q_start=tuple(q_start),
+            goal_q=tuple(q_goal),
+            planner=_fast_config(),
+        )
+        result = plan(
+            request=request,
+            scene=ur5_scene,
+            checker=ur5_checker,
+            ik=ik,
+            sampler=stub_sampler,
             optimizer=None,
             parameteriser=toppra,
             cancel=CancelToken(),
@@ -473,11 +572,11 @@ def test_plan_timeout_maps_to_error_code(
     ur5_checker: CollisionChecker,
     toppra: ToppRAParameteriser,
 ) -> None:
-    """PlanTimeout from sampler -> PLANNING_TIMEOUT."""
-    from unittest.mock import MagicMock
+    """PlanTimeout from sampler -> PLANNING_TIMEOUT.
 
-    mock_sampler = MagicMock()
-    mock_sampler.solve.side_effect = PlanTimeout("timed out")
+    Uses a minimal ABC subclass instead of MagicMock (auditor item #9 / Fix E).
+    """
+    stub_sampler = _PlanTimeoutSampler()
 
     ik = IKSolver(ur5_scene, residual_tol_m=0.02, cache_size=256)
     try:
@@ -494,7 +593,7 @@ def test_plan_timeout_maps_to_error_code(
             scene=ur5_scene,
             checker=ur5_checker,
             ik=ik,
-            sampler=mock_sampler,
+            sampler=stub_sampler,
             optimizer=None,
             parameteriser=toppra,
             cancel=CancelToken(),
@@ -517,11 +616,11 @@ def test_ik_unreachable_maps_to_error_code(
     sampler: RRTStarPlanner,
     toppra: ToppRAParameteriser,
 ) -> None:
-    """PlanningIKUnreachable from IK -> PLANNING_IK_UNREACHABLE."""
-    from unittest.mock import MagicMock
+    """PlanningIKUnreachable from IK -> PLANNING_IK_UNREACHABLE.
 
-    mock_ik = MagicMock()
-    mock_ik.solve.side_effect = PlanningIKUnreachable("unreachable")
+    Uses a minimal stub instead of MagicMock (auditor item #9 / Fix E).
+    """
+    stub_ik = _IKUnreachableSolver()
 
     request = PlanRequest(
         robot_id="arm0",
@@ -533,7 +632,7 @@ def test_ik_unreachable_maps_to_error_code(
         request=request,
         scene=ur5_scene,
         checker=ur5_checker,
-        ik=mock_ik,
+        ik=stub_ik,
         sampler=sampler,
         optimizer=None,
         parameteriser=toppra,

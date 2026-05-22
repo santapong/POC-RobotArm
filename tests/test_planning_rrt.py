@@ -40,6 +40,10 @@ from src.station.scene import Frame, RobotEntry, Station  # noqa: E402
 def test_parallel_plan_not_imported_in_samplers_module() -> None:
     """ParallelPlan segfaults with Python callbacks (OMPL issue #1146).
     The samplers module must never import it. (risk #6)
+
+    Belt-and-braces copy. The authoritative (OMPL-free) version lives in
+    test_planning_types.py::test_parallel_plan_not_imported_in_samplers_module
+    so this check runs even when OMPL is not installed.
     """
     assert "ParallelPlan" not in dir(_samplers_module), (
         "ompl.tools.ParallelPlan was found in samplers module — "

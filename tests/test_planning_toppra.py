@@ -184,7 +184,16 @@ def test_infeasible_path_raises_plan_limits_exceeded(
 def test_plan_limits_exceeded_has_singularity_hint_field(
     ur5_scene: SceneSnapshot, parameteriser: ToppRAParameteriser
 ) -> None:
-    """PlanLimitsExceeded.singularity_hint must be populated for hinting (risk #10)."""
+    """PlanLimitsExceeded.singularity_hint must be non-empty for hinting (risk #10).
+
+    Fix C: the previous version only checked isinstance(hint, tuple) which
+    allowed an empty tuple — useless to callers. Risk #10 mitigation requires
+    the hint to be populated so the planner can retry with a different seed.
+
+    The path is chosen to guarantee _high_velocity_segments produces hits:
+    a jump of π rad in a single step vastly exceeds vmax * 0.5 for any
+    robot with sane limits, so at least one waypoint index must be flagged.
+    """
     dof = ur5_scene.dof
     wps = [
         [0.0] * dof,
@@ -195,10 +204,17 @@ def test_plan_limits_exceeded_has_singularity_hint_field(
     try:
         parameteriser.parameterise(ur5_scene, wps, cfg, CancelToken())
     except PlanLimitsExceeded as exc:
-        # singularity_hint must be a tuple of non-negative ints
         hint = exc.singularity_hint
+        # singularity_hint must be a tuple of non-negative ints
         assert isinstance(hint, tuple)
         assert all(isinstance(i, int) and i >= 0 for i in hint)
+        # Fix C: hint must be non-empty so the caller has actionable data
+        assert len(hint) > 0, (
+            "PlanLimitsExceeded.singularity_hint is empty. "
+            "Risk #10 mitigation requires at least one flagged waypoint index "
+            "so the planner can try a different seed. If _high_velocity_segments "
+            "returns () for this input, that is an implementation bug."
+        )
         return  # test passed
     pytest.fail("Expected PlanLimitsExceeded but no exception was raised")
 

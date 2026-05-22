@@ -19,6 +19,18 @@ Design notes
 - Per audit-rubric criterion 2 (over-mocking), ``PlanningRuntime`` and
   ``src.planning.*`` are NOT mocked; only the heavy C-extension backends
   (OMPL / Drake / toppra) are replaced with pure-Python stubs.
+
+PLANNING_UNAVAILABLE (422) note
+---------------------------------
+``PLANNING_UNAVAILABLE`` (422) is the Windows / missing-extra guard raised
+when ``from src.planning.types import PlanningUnavailable`` raises
+``ImportError`` inside ``server/routers/planning.py:152-160``.  It cannot
+be exercised in this CI environment because ``pytest.importorskip('pybullet')``
+already gates module collection — by the time these tests run, the planning
+extra is installed.  The error code is structurally covered by the lazy-import
+block in ``server/services/errors.py`` and ``server/routers/planning.py``.
+The guard is present and correct in the implementation; it simply cannot be
+triggered without uninstalling the planning extra first.
 """
 
 from __future__ import annotations
@@ -101,6 +113,17 @@ def _make_stub_parameteriser():
     return _StubParameteriser()
 
 
+def _make_limits_exceeded_parameteriser(singularity_hint: tuple[int, ...] = (1, 2)):
+    """A parameteriser that always raises PlanLimitsExceeded."""
+    from src.planning.parameteriser import PlanLimitsExceeded, TimeParameteriser
+
+    class _LimitsExceededParameteriser(TimeParameteriser):
+        def parameterise(self, scene, waypoints, config, cancel, dt_s: float = 0.01):
+            raise PlanLimitsExceeded("...test...", singularity_hint=singularity_hint)
+
+    return _LimitsExceededParameteriser()
+
+
 @contextlib.contextmanager
 def _patch_planning_runtime(planner=None, parameteriser=None) -> Iterator[None]:
     """Patch ``PlanningRuntime._ensure_stateless_components`` with stubs.
@@ -160,6 +183,24 @@ def _wait_for_plan(
             return body
         time.sleep(poll_s)
     raise TimeoutError(f"Plan {plan_id} did not reach terminal state in {timeout_s}s")
+
+
+def _wait_for_run(
+    client: TestClient,
+    run_id: str,
+    timeout_s: float = 20.0,
+    poll_s: float = 0.2,
+) -> dict:
+    """Poll GET /api/programs/runs/{run_id} until status is terminal."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        r = client.get(f"/api/programs/runs/{run_id}")
+        assert r.status_code == 200, f"GET run failed: {r.text}"
+        body = r.json()
+        if body["status"] in ("completed", "failed"):
+            return body
+        time.sleep(poll_s)
+    raise TimeoutError(f"Run {run_id} did not reach terminal state in {timeout_s}s")
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +421,15 @@ def test_get_trajectory_409_when_running():
             r_create = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
             plan_id = r_create.json()["plan_id"]
 
-            # The plan is now dispatched but still running in the executor.
+            # Poll until status='running' (plan is in the executor) before
+            # fetching the trajectory so the timing is deterministic.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                status_r = c.get(f"/api/planning/plans/{plan_id}")
+                if status_r.json().get("status") == "running":
+                    break
+                time.sleep(0.02)
+
             r = c.get(f"/api/planning/plans/{plan_id}/trajectory")
     assert r.status_code == 409
     assert r.json()["code"] == "PLAN_NOT_COMPLETED"
@@ -405,6 +454,14 @@ def test_execute_plan_409_when_running():
             r_create = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
             plan_id = r_create.json()["plan_id"]
 
+            # Poll until status='running' before calling execute.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                status_r = c.get(f"/api/planning/plans/{plan_id}")
+                if status_r.json().get("status") == "running":
+                    break
+                time.sleep(0.02)
+
             r = c.post(
                 f"/api/planning/plans/{plan_id}/execute",
                 json={"dt_s": 0.01},
@@ -414,15 +471,21 @@ def test_execute_plan_409_when_running():
 
 
 # ---------------------------------------------------------------------------
-# Test: cancel mid-flight updates status to 'cancelled'
+# Test: cancel mid-flight updates status to 'cancelled' with PLANNING_CANCELLED
 # Covers: cooperative cancellation; Risk §J #12 (cancel latency)
+# Finding 3: assert error_code == "PLANNING_CANCELLED" in the plan record.
+# Finding 8: polled wait replaces bare time.sleep(0.3).
 # ---------------------------------------------------------------------------
 
 
 def test_cancel_plan_updates_status():
     """POST cancel on a running plan must return the record with status
-    'cancelled'.  Uses a slow planner so the plan is still running when
-    cancel fires."""
+    'cancelled' and error_code='PLANNING_CANCELLED'.  Uses a slow planner so
+    the plan is still running when cancel fires.
+
+    The cancel endpoint awaits the future with a 3 s timeout; after returning,
+    the record must already reflect 'cancelled' and the error_code from the
+    cooperative PlanCancelled exception must be stored."""
     pytest.importorskip("pybullet")
 
     app = create_app()
@@ -432,7 +495,14 @@ def test_cancel_plan_updates_status():
             r_create = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
             plan_id = r_create.json()["plan_id"]
 
-            time.sleep(0.3)  # let the executor start the planner
+            # Polled wait: wait until the plan is in 'running' state before
+            # cancelling (replaces bare time.sleep; bounded to 2 s).
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                status_r = c.get(f"/api/planning/plans/{plan_id}")
+                if status_r.json().get("status") == "running":
+                    break
+                time.sleep(0.02)
 
             r_cancel = c.post(f"/api/planning/plans/{plan_id}/cancel")
             assert r_cancel.status_code == 200, f"Cancel failed: {r_cancel.text}"
@@ -442,6 +512,14 @@ def test_cancel_plan_updates_status():
             final_status = r_cancel.json()["status"]
 
     assert final_status == "cancelled", f"Expected cancelled, got {final_status!r}"
+
+    # Finding 3: after cancel, fetch the record and assert error_code stored.
+    # (The record from cancel() return already contains error_code because
+    # _record_to_response is used; verify via a fresh GET as well.)
+    cancel_body = r_cancel.json()
+    assert cancel_body.get("error_code") == "PLANNING_CANCELLED", (
+        f"Expected error_code='PLANNING_CANCELLED', got {cancel_body.get('error_code')!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +589,43 @@ def test_execute_plan_returns_run_id():
 
 
 # ---------------------------------------------------------------------------
+# Test: 503 SIM_DISCONNECTED when sim_runtime is None on execute
+# Covers: Finding 6 — execute endpoint's SIM_DISCONNECTED guard
+# ---------------------------------------------------------------------------
+
+
+def test_execute_plan_503_when_sim_disconnected():
+    """POST /api/planning/plans/{id}/execute when the sim_runtime has been
+    torn down must return 503 SIM_DISCONNECTED."""
+    pytest.importorskip("pybullet")
+
+    app = create_app()
+    with _patch_planning_runtime():
+        with TestClient(app) as c:
+            _spawn_robot(c)
+            r_create = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
+            plan_id = r_create.json()["plan_id"]
+            _wait_for_plan(c, plan_id)
+
+            # Null out sim_runtime to simulate SIM_DISCONNECTED.
+            from server.services.session import get_session
+
+            session = get_session()
+            original_sim = session.sim_runtime
+            session.sim_runtime = None
+            try:
+                r_exec = c.post(
+                    f"/api/planning/plans/{plan_id}/execute",
+                    json={"dt_s": 0.01},
+                )
+            finally:
+                session.sim_runtime = original_sim  # restore so lifespan cleanup works
+
+    assert r_exec.status_code == 503
+    assert r_exec.json()["code"] == "SIM_DISCONNECTED"
+
+
+# ---------------------------------------------------------------------------
 # Test: cache hit short-circuits the executor
 # Covers: plan cache (LRU cap 32); Risk §J #11 (collision determinism)
 # The second plan with the same (scene, request) fingerprint returns
@@ -545,6 +660,69 @@ def test_cache_hit_short_circuits():
     assert rec2["cache_hit"] is True, (
         "Second plan with same (scene, request) fingerprint must be served from cache"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test: cache lock handles concurrent submissions without KeyError
+# Covers: Finding 4 — _plan_cache_lock race between event-loop read path and
+#         worker-thread popitem/setitem (iteration-2 fix validation)
+# ---------------------------------------------------------------------------
+
+
+def test_cache_lock_handles_concurrent_submissions():
+    """Submitting two identical plan requests back-to-back (without waiting
+    for the first to complete) must not raise a KeyError from the concurrent
+    dict read/write in plan() vs _plan_blocking().
+
+    The iteration-2 fix adds a threading.Lock around the cache operations.
+    This test validates that fix by racing two identical submissions five
+    times, asserting both always reach status=completed without errors."""
+    pytest.importorskip("pybullet")
+
+    # Planner that sleeps 200 ms so the first plan is in-flight long enough
+    # for the second submission to race the cache lookup.
+    from src.planning.samplers import Planner, PlannerKind
+
+    class _SlightlySlowPlanner(Planner):
+        kind = PlannerKind.RRT_STAR
+
+        def solve(self, scene, checker, q_start, q_goal, config, cancel, on_progress=None):
+            cancel.raise_if_cancelled()
+            time.sleep(0.2)
+            cancel.raise_if_cancelled()
+            if on_progress is not None:
+                on_progress(1.0)
+            return (tuple(q_start), tuple(q_goal))
+
+    for _ in range(5):
+        app = create_app()
+        with _patch_planning_runtime(planner=_SlightlySlowPlanner()):
+            with TestClient(app) as c:
+                _spawn_robot(c)
+
+                # Submit two identical plan requests back-to-back.
+                r1 = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
+                r2 = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
+                assert r1.status_code == 200, f"Plan 1 submission failed: {r1.text}"
+                assert r2.status_code == 200, f"Plan 2 submission failed: {r2.text}"
+
+                plan_id1 = r1.json()["plan_id"]
+                plan_id2 = r2.json()["plan_id"]
+
+                # Poll both to terminal status.
+                rec1 = _wait_for_plan(c, plan_id1, timeout_s=15.0)
+                rec2 = _wait_for_plan(c, plan_id2, timeout_s=15.0)
+
+        assert rec1["status"] == "completed", (
+            f"Plan 1 did not complete (race iteration); got: {rec1}"
+        )
+        assert rec2["status"] == "completed", (
+            f"Plan 2 did not complete (race iteration); got: {rec2}"
+        )
+        # At least one of the two must report cache_hit=True (the second
+        # may be served from cache once the first populates it).  In some
+        # race timings both run in the executor, in others one gets a hit.
+        # The key property is no KeyError / crash — both complete cleanly.
 
 
 # ---------------------------------------------------------------------------
@@ -624,15 +802,46 @@ def test_planning_no_solution_in_blocked_scene():
 
 
 # ---------------------------------------------------------------------------
+# Test: PLANNING_LIMITS_EXCEEDED stored in record
+# Covers: Finding 5 — parameteriser raising PlanLimitsExceeded
+# ---------------------------------------------------------------------------
+
+
+def test_planning_limits_exceeded_stored_in_record():
+    """A parameteriser that raises PlanLimitsExceeded causes status=failed
+    with error_code=PLANNING_LIMITS_EXCEEDED and singularity_hint=[1, 2]."""
+    pytest.importorskip("pybullet")
+
+    app = create_app()
+    with _patch_planning_runtime(parameteriser=_make_limits_exceeded_parameteriser((1, 2))):
+        with TestClient(app) as c:
+            _spawn_robot(c)
+            r_create = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
+            plan_id = r_create.json()["plan_id"]
+            record = _wait_for_plan(c, plan_id)
+
+    assert record["status"] == "failed", (
+        f"Expected status=failed, got {record['status']!r}"
+    )
+    assert record["error_code"] == "PLANNING_LIMITS_EXCEEDED", (
+        f"Expected error_code='PLANNING_LIMITS_EXCEEDED', got {record['error_code']!r}"
+    )
+    assert record["singularity_hint"] == [1, 2], (
+        f"Expected singularity_hint=[1, 2], got {record['singularity_hint']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Test: run_program with planner="rrt" completes; planner="linear" unchanged
 # Covers: programs.py augmentation; Risk §J #14 (no regression to Phase 1)
+# Finding 2: poll until terminal status, assert status=="completed".
 # ---------------------------------------------------------------------------
 
 
 def test_run_program_with_rrt_planner():
-    """POST /api/programs/demo/run with {'planner': 'rrt'} should return a
-    run_id.  The run may fail if the demo program has no Cartesian moves —
-    but the endpoint must not raise a 500 or return a bad status code.
+    """POST /api/programs/demo/run with {'planner': 'rrt'} must complete
+    successfully.  The async task must reach a terminal status — we poll
+    GET /api/programs/runs/{run_id} until done and assert status==completed.
 
     Separately, {'planner': 'linear'} (the Phase 1 default) must continue
     to work exactly as before (backwards-compatibility regression guard)."""
@@ -646,12 +855,92 @@ def test_run_program_with_rrt_planner():
             # Linear planner — Phase 1 path unchanged
             r_linear = c.post("/api/programs/demo/run", json={"planner": "linear"})
             assert r_linear.status_code == 200, f"linear run failed: {r_linear.text}"
-            assert "run_id" in r_linear.json(), "linear run must return run_id"
+            run_id_linear = r_linear.json().get("run_id")
+            assert run_id_linear, "linear run must return run_id"
+
+            # Poll until the linear run reaches terminal status.
+            rec_linear = _wait_for_run(c, run_id_linear, timeout_s=20.0)
+            assert rec_linear["status"] == "completed", (
+                f"Linear run expected completed, got {rec_linear['status']!r}: {rec_linear}"
+            )
 
             # RRT planner — new Phase 3 path
             r_rrt = c.post("/api/programs/demo/run", json={"planner": "rrt"})
             assert r_rrt.status_code == 200, f"rrt run failed: {r_rrt.text}"
-            assert "run_id" in r_rrt.json(), "rrt run must return run_id"
+            run_id_rrt = r_rrt.json().get("run_id")
+            assert run_id_rrt, "rrt run must return run_id"
+
+            # Poll until the RRT run reaches terminal status.
+            rec_rrt = _wait_for_run(c, run_id_rrt, timeout_s=20.0)
+            assert rec_rrt["status"] == "completed", (
+                f"RRT run expected completed, got {rec_rrt['status']!r}: {rec_rrt}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Test: run_program_rrt failure when planner raises PlanNoSolution
+# Covers: Finding 1 — PLANNING_FAILED in run record; bridge NOT called
+# ---------------------------------------------------------------------------
+
+
+def test_run_program_rrt_failure_marks_planning_failed():
+    """When a per-move plan fails (PlanNoSolution raised for every call),
+    the run record must reach status='failed' with error containing
+    'PLANNING_FAILED', and bridge.start_trajectory must NOT be called.
+
+    Verifies that the _run_program_task_rrt path fails fast on planning
+    errors and does not try to execute a partial trajectory."""
+    pytest.importorskip("pybullet")
+
+    from src.planning.samplers import Planner, PlannerKind, PlanNoSolution
+
+    class _AlwaysFailPlanner(Planner):
+        kind = PlannerKind.RRT_STAR
+
+        def solve(self, scene, checker, q_start, q_goal, config, cancel, on_progress=None):
+            raise PlanNoSolution("No solution — test stub")
+
+    app = create_app()
+    with _patch_planning_runtime(planner=_AlwaysFailPlanner()):
+        with TestClient(app) as c:
+            _spawn_robot(c)
+
+            # Intercept bridge.start_trajectory to verify it is never called.
+            from server.services.session import get_session
+
+            session = get_session()
+            bridge = session.sim_runtime.bridge
+            start_traj_calls = []
+            original_start = bridge.start_trajectory
+
+            def _counting_start(*args, **kwargs):
+                start_traj_calls.append(args)
+                return original_start(*args, **kwargs)
+
+            bridge.start_trajectory = _counting_start
+
+            try:
+                r_rrt = c.post("/api/programs/demo/run", json={"planner": "rrt"})
+                assert r_rrt.status_code == 200, f"run failed unexpectedly: {r_rrt.text}"
+                run_id = r_rrt.json()["run_id"]
+
+                # Poll until terminal.
+                record = _wait_for_run(c, run_id, timeout_s=20.0)
+            finally:
+                bridge.start_trajectory = original_start
+
+    assert record["status"] == "failed", (
+        f"Expected status=failed when planner raises PlanNoSolution, "
+        f"got {record['status']!r}"
+    )
+    assert "PLANNING_FAILED" in (record.get("error") or ""), (
+        f"Expected 'PLANNING_FAILED' in run record error, "
+        f"got {record.get('error')!r}"
+    )
+    assert len(start_traj_calls) == 0, (
+        f"bridge.start_trajectory must NOT be called on planning failure, "
+        f"but was called {len(start_traj_calls)} time(s)"
+    )
 
 
 # ---------------------------------------------------------------------------

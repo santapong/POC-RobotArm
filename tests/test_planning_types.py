@@ -635,3 +635,32 @@ def test_planning_unavailable_is_runtime_error():
 def test_plan_timeout_is_runtime_error():
     exc = PlanTimeout("timed out")
     assert isinstance(exc, RuntimeError)
+
+
+# ---------------------------------------------------------------------------
+# Fix B: ParallelPlan ban check — risk #6
+# ---------------------------------------------------------------------------
+# This test was previously in test_planning_rrt.py which is gated behind
+# pytest.importorskip("ompl"). Moving it here ensures the introspection-only
+# ban check runs even on machines without OMPL installed. The rrt file keeps
+# a belt-and-braces copy; this is the authoritative one.
+
+
+def test_parallel_plan_not_imported_in_samplers_module() -> None:
+    """Risk #6: ompl.tools.ParallelPlan segfaults with Python callbacks (OMPL issue #1146).
+
+    The ban is enforced by introspection — no OMPL install required.
+    This test must run in every environment, including those without OMPL.
+    """
+    from src.planning import samplers
+    assert "ParallelPlan" not in dir(samplers), (
+        "ompl.tools.ParallelPlan was found in the samplers module — "
+        "this violates the hard ban (risk #6: segfaults with Python callbacks)"
+    )
+    # Also confirm no transitive import path leaked it into sys.modules.
+    import sys
+    parallel_plan_modules = [name for name in sys.modules if "ParallelPlan" in name]
+    assert parallel_plan_modules == [], (
+        f"ParallelPlan appeared in sys.modules via a transitive import: "
+        f"{parallel_plan_modules}"
+    )

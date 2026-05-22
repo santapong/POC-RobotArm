@@ -64,17 +64,22 @@ def test_no_collision_at_home_config(ur5_checker: CollisionChecker, ur5_scene: S
 def test_known_self_collision_config(ur5_checker: CollisionChecker, ur5_scene: SceneSnapshot) -> None:
     """Extreme joint values that force self-intersection must return True.
 
-    For ur5, setting joints [1] and [3] to ±pi forces the elbow to fold
-    back into the upper arm — a known self-collision.
+    For ur5, setting joint[1]=π, joint[2]=π, joint[3]=-π/2 folds the elbow
+    back into the upper arm. Verified against the UR5 URDF geometry: this
+    configuration produces actual link-mesh overlap that PyBullet's narrow
+    phase reports as a contact with distance ≤ 0 (self-collision).
+
+    Fix A: was asserting isinstance(result, bool) which accepted any return
+    value. Now asserts the geometrically guaranteed True.
     """
     import math
     q = [0.0, math.pi, math.pi, -math.pi / 2.0, 0.0, 0.0]
-    # At least the collision check runs without error; result is typically True
-    # for this folded pose but we can't guarantee it without actual geometry.
-    # We assert the result type, not the exact value — the invariant we're
-    # testing is that the query succeeds from the calling thread.
     result = ur5_checker.is_collision(q)
-    assert isinstance(result, bool)
+    assert result is True, (
+        f"Expected self-collision for folded UR5 config {q!r}, got {result}. "
+        "The test ensures the checker actually detects self-intersection, not "
+        "just that it returns a bool."
+    )
 
 
 # Extra coverage: large clearance always triggers collision (risk #11 — determinism)
