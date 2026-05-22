@@ -14,7 +14,7 @@
 import { Outliner } from "./Outliner";
 import { Viewport } from "./Viewport";
 import { Inspector } from "./Inspector";
-import { CodePanel } from "./CodePanel";
+import { BottomPanel } from "./BottomPanel";
 import { JogPanel } from "./JogPanel";
 import { Toolbar } from "./Toolbar";
 import { StatusBar } from "./StatusBar";
@@ -57,10 +57,8 @@ export function Layout() {
         </div>
       </div>
 
-      {/* Code panel */}
-      <div className="h-56 shrink-0 border-t">
-        <CodePanel />
-      </div>
+      {/* Bottom panel (Code + Vision tabs) */}
+      <BottomPanel />
 
       {/* Jog panel */}
       <div className="h-32 shrink-0 border-t">

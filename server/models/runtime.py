@@ -96,6 +96,7 @@ class AssetImportResponse(BaseModel):
     kind: Literal["mesh", "dxf"]
     filename: str
     summary: str
+    saved_path: str = ""
     station_entity: Optional[FixtureEntryModel] = None
 
 

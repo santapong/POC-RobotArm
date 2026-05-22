@@ -46,7 +46,12 @@ cam = [
     "trimesh>=4.0",
     "ezdxf>=1.0",
 ]
-vision = []
+vision = [
+    "opencv-contrib-python>=4.10",
+    "numpy>=1.24,<2.0",
+    "Pillow>=10.0",
+]
+vision-ml = ["ultralytics>=8.3"]
 planning = []
 learning = []
 io = []
@@ -67,6 +72,7 @@ all = [
     "httpx>=0.27",
     "matplotlib>=3.7.0",
     "ollama>=0.4.0",
+    "opencv-contrib-python>=4.10",
     "Pillow>=10.0",
     "python-multipart>=0.0.9",
     "pybullet>=3.2.5",
@@ -94,6 +100,7 @@ include = ["src*", "server*"]
 [tool.pytest.ini_options]
 markers = [
     "gui: tests that require a real GUI (skipped unless RUN_GUI_TESTS=1)",
+    "vision: tests that require opencv-contrib-python",
 ]
 testpaths = ["tests"]
 

@@ -12,6 +12,7 @@ import { FileDialogs } from "./components/FileDialogs";
 import { AboutDialog } from "./components/AboutDialog";
 import { useTelemetry } from "./ws/useTelemetry";
 import { useEvents } from "./ws/useEvents";
+import { useVisionDetections } from "./ws/useVisionDetections";
 import { useCatalogStore } from "./store/catalog";
 import { useStationStore } from "./store/station";
 import { getCatalog } from "./api/robots";
@@ -21,6 +22,7 @@ export default function App() {
   // Activate WebSocket hooks at root level so they persist for the app lifetime
   useTelemetry();
   useEvents();
+  useVisionDetections();
 
   const setCatalog = useCatalogStore((s) => s.setCatalog);
   const setStation = useStationStore((s) => s.setStation);

@@ -200,6 +200,7 @@ export interface AssetImportResponse {
   asset_id: string;
   kind: "mesh" | "dxf";
   filename: string;
+  saved_path: string;
   summary: string;
   station_entity: FixtureEntryModel | null;
 }
@@ -264,4 +265,129 @@ export interface ProgramListEntry {
 
 export interface SaveStationResponse {
   json: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Vision models (Phase 2)
+// ---------------------------------------------------------------------------
+
+export interface CameraSpec {
+  kind: "real" | "fake";
+  source: number | string;
+  name: string;
+  width?: number;
+  height?: number;
+  fake_image_paths?: string[];
+  fps?: number;
+}
+
+export interface CameraStatus {
+  name: string;
+  kind: "real" | "fake";
+  width: number;
+  height: number;
+  has_intrinsics: boolean;
+  has_extrinsics: boolean;
+  live_detector: string | null;
+}
+
+export interface CameraIntrinsicsModel {
+  fx: number;
+  fy: number;
+  cx: number;
+  cy: number;
+  width: number;
+  height: number;
+  dist_coeffs: number[];
+}
+
+export interface CameraExtrinsicsModel {
+  R_cam_in_world: [[number, number, number], [number, number, number], [number, number, number]];
+  t_cam_in_world: [number, number, number];
+  reference_frame: string;
+  mount: "eye_to_hand" | "eye_in_hand";
+}
+
+export interface DetectorSpec {
+  kind: "yolo" | "color";
+  name: string;
+  config?: Record<string, unknown>;
+}
+
+export interface DetectorStatus {
+  name: string;
+  kind: "yolo" | "color";
+  config: Record<string, unknown>;
+  live_cameras: string[];
+}
+
+export interface DetectionModel {
+  class_name: string;
+  confidence: number;
+  bbox_xyxy: [number, number, number, number];
+  mask: null;
+  pose_in_camera: GraspPoseModel | null;
+  pose_in_world: GraspPoseModel | null;
+}
+
+export interface GraspPoseModel {
+  xyz_m: [number, number, number];
+  quat_wxyz: [number, number, number, number];
+  frame: string;
+  approach_vector: [number, number, number];
+}
+
+export interface PosePairModel {
+  R_gripper2base: [[number, number, number], [number, number, number], [number, number, number]];
+  t_gripper2base: [number, number, number];
+  R_target2cam: [[number, number, number], [number, number, number], [number, number, number]];
+  t_target2cam: [number, number, number];
+}
+
+export interface HandEyeRequest {
+  pose_pairs: PosePairModel[];
+  method?: "tsai" | "park" | "horaud" | "andreff" | "daniilidis";
+  mount?: "eye_to_hand" | "eye_in_hand";
+  reference_frame?: string;
+}
+
+export interface RunDetectionRequest {
+  camera: string;
+  return_grasp?: boolean;
+  plane_z_m?: number;
+}
+
+export interface RunDetectionResponse {
+  camera: string;
+  detector: string;
+  detections: DetectionModel[];
+  grasps: GraspPoseModel[];
+  monotonic_s: number;
+}
+
+export interface LiveDetectionFrame {
+  camera: string;
+  detector: string;
+  detections: DetectionModel[];
+  grasps: GraspPoseModel[];
+  monotonic_s: number;
+}
+
+export interface CharucoPoseResponse {
+  R_target2cam: [[number, number, number], [number, number, number], [number, number, number]];
+  t_target2cam: [number, number, number];
+}
+
+export interface GraspPreviewRequest {
+  robot_id: string;
+  grasp: GraspPoseModel;
+  preview_mode?: "jog" | "ik_only";
+}
+
+export interface GraspPreviewResponse {
+  joints_rad: number[];
+  reachable: boolean;
+  ik_residual_m: number;
+  applied: boolean;
+  error: string | null;
 }

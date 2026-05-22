@@ -14,11 +14,14 @@ Notes
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from server.models.runtime import RunRecord
 from server.services.sim import SimRuntime
 from src.station.scene import Frame, Station
+
+if TYPE_CHECKING:
+    from server.services.vision import VisionRuntime
 
 
 def _empty_station() -> Station:
@@ -71,6 +74,7 @@ class Session:
         self.station: Station = _empty_station()
         self.station_path: Optional[str] = None
         self.sim_runtime: Optional[SimRuntime] = None
+        self.vision_runtime: Optional["VisionRuntime"] = None
         self.runs: dict[str, RunRecord] = {}
         self.assets: dict[str, _AssetRecord] = {}
         self.lock: asyncio.Lock = asyncio.Lock()

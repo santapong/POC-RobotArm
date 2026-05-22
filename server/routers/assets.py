@@ -141,6 +141,7 @@ async def import_asset(
         kind=kind,  # type: ignore[arg-type]
         filename=filename,
         summary=summary,
+        saved_path=path_str,
         station_entity=station_entity,
     )
 

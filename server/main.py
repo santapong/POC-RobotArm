@@ -52,6 +52,12 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await session.sim_runtime.stop()
         except Exception:  # noqa: BLE001
             pass
+    # Shutdown: stop VisionRuntime if active.
+    if session.vision_runtime is not None:
+        try:
+            await session.vision_runtime.stop()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def create_app() -> FastAPI:
@@ -123,16 +129,20 @@ def create_app() -> FastAPI:
     from server.routers.programs import router as programs_router
     from server.routers.robots import router as robots_router
     from server.routers.station import router as station_router
+    from server.routers.vision import router as vision_router
     from server.ws.events import router as events_router
     from server.ws.telemetry import router as telemetry_router
+    from server.ws.vision import router as vision_ws_router
 
     app.include_router(health_router)
-    app.include_router(station_router)
-    app.include_router(robots_router)
-    app.include_router(programs_router)
     app.include_router(assets_router)
+    app.include_router(programs_router)
+    app.include_router(robots_router)
+    app.include_router(station_router)
+    app.include_router(vision_router)
     app.include_router(events_router)
     app.include_router(telemetry_router)
+    app.include_router(vision_ws_router)
 
     # ------------------------------------------------------------------
     # Static files

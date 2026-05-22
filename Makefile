@@ -1,4 +1,4 @@
-.PHONY: help install install-rtb install-all install-kali test test-rtb test-server smoke smoke-ui uat sim lint clean server web web-build web-typecheck
+.PHONY: help install install-rtb install-all install-kali test test-rtb test-server test-vision smoke smoke-ui uat sim lint clean server web web-build web-typecheck
 
 PYTHON ?= python
 
@@ -11,6 +11,7 @@ help:
 	@echo "  test         - run headless tests (no rtb required)"
 	@echo "  test-rtb     - run all tests including rtb-gated ones"
 	@echo "  test-server  - run FastAPI endpoint + websocket tests"
+	@echo "  test-vision  - run vision tests (requires [vision] extra)"
 	@echo "  smoke        - run PyBullet GUI smoke test (opens a real window)"
 	@echo "  smoke-ui     - run PySide6 UI smoke test under offscreen Qt"
 	@echo "  uat          - run scripts/uat_run.py (UAT acceptance harness)"
@@ -58,6 +59,9 @@ test-rtb:
 
 test-server:
 	$(PYTHON) -m pytest tests/test_station_endpoints.py tests/test_robots_endpoints.py tests/test_programs_endpoints.py tests/test_assets_endpoints.py tests/test_ws_telemetry.py -q
+
+test-vision:
+	$(PYTHON) -m pytest tests/test_vision_*.py -q
 
 smoke:
 	RUN_GUI_TESTS=1 $(PYTHON) -m pytest tests/test_gui_smoke.py -v
