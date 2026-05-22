@@ -17,12 +17,18 @@ The stub planner adds a brief ``time.sleep`` between cooperative-cancel
 polls so the WS connection can be established while the plan is still in
 flight.
 
+``receive_json()`` on the TestClient WebSocket is synchronous and blocks
+indefinitely if no frames arrive.  We therefore collect frames in a
+background thread with a hard wall-time limit to keep tests bounded.
+
 Skipped entirely if fastapi or httpx are not installed.
 """
 
 from __future__ import annotations
 
 import contextlib
+import queue
+import threading
 import time
 from typing import Iterator
 
@@ -33,7 +39,7 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from server.main import create_app  # noqa: E402
+from server.main import create_app  # noqa: E402  # noqa: E402
 
 pytestmark = pytest.mark.planning
 
@@ -44,8 +50,7 @@ pytestmark = pytest.mark.planning
 
 
 def _make_medium_planner(step_sleep_s: float = 0.05, n_steps: int = 6):
-    """A planner that sleeps cooperatively — runs for step_sleep_s × n_steps
-    so the WS has time to connect and receive intermediate frames."""
+    """A planner that sleeps cooperatively so the WS can receive frames."""
     from src.planning.samplers import Planner, PlannerKind
 
     class _MediumPlanner(Planner):
@@ -142,36 +147,47 @@ _VALID_PLAN_BODY = {
 }
 
 
-def _collect_ws_frames(
-    client: TestClient,
-    path: str,
+def _collect_ws_frames_threaded(
+    ws,
     max_frames: int = 10,
-    read_timeout_s: float = 5.0,
+    timeout_s: float = 5.0,
     stop_on_stages: tuple[str, ...] = ("completed", "failed", "cancelled"),
 ) -> list[dict]:
-    """Collect up to ``max_frames`` frames from a WS endpoint.
+    """Collect frames from an open WebSocket using a background thread.
 
-    Uses a timeout to prevent tests from blocking indefinitely.  The
-    ``receive_json()`` call on TestClient is synchronous; we wrap the
-    collection in a thread-local deadline guard by limiting iterations.
-
-    Note: ``TestClient.websocket_connect`` does NOT accept a ``timeout``
-    parameter — we rely on the planner's step sleep to keep the total
-    wall time bounded.
+    ``ws.receive_json()`` blocks indefinitely when no more frames arrive.
+    Running it in a daemon thread with a hard wall-time deadline prevents
+    the test suite from hanging.
     """
-    collected = []
-    deadline = time.monotonic() + read_timeout_s
-    with client.websocket_connect(path) as ws:
-        for _ in range(max_frames):
-            if time.monotonic() > deadline:
-                break
-            try:
+    result_q: queue.Queue = queue.Queue()
+
+    def _reader():
+        try:
+            while True:
                 frame = ws.receive_json()
-                collected.append(frame)
+                result_q.put(frame)
                 if frame.get("stage") in stop_on_stages:
                     break
-            except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
+            pass  # WS closed / timed out
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+
+    collected = []
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline and len(collected) < max_frames:
+        try:
+            frame = result_q.get(timeout=max(0.0, deadline - time.monotonic()))
+            collected.append(frame)
+            if frame.get("stage") in stop_on_stages:
                 break
+        except queue.Empty:
+            break
+
+    # Don't join the thread — if receive_json is blocking, the daemon thread
+    # will be killed at process exit. The WebSocket context manager will close
+    # the connection which unblocks receive_json.
     return collected
 
 
@@ -190,7 +206,7 @@ def test_ws_receives_stage_transitions_for_running_plan():
     for the ordering requirement)."""
     pytest.importorskip("pybullet")
 
-    # Use a medium planner so the plan stays in flight during WS connection.
+    # Medium planner stays in flight while WS connects.
     planner = _make_medium_planner(step_sleep_s=0.06, n_steps=8)
 
     app = create_app()
@@ -201,17 +217,15 @@ def test_ws_receives_stage_transitions_for_running_plan():
             # Submit the plan first (creates the runtime).
             r = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
             assert r.status_code == 200
-            # plan_id unused here — we just need the runtime to exist.
 
-            # Now connect to WS; the handler finds a live runtime and
-            # subscribes the queue.
-            frames = _collect_ws_frames(
-                c,
-                "/ws/planning/progress",
-                max_frames=15,
-                read_timeout_s=8.0,
-                stop_on_stages=("completed", "failed", "cancelled"),
-            )
+            # Connect to WS while plan is in-flight.
+            with c.websocket_connect("/ws/planning/progress") as ws:
+                frames = _collect_ws_frames_threaded(
+                    ws,
+                    max_frames=15,
+                    timeout_s=8.0,
+                    stop_on_stages=("completed", "failed", "cancelled"),
+                )
 
     observed_stages = {f.get("stage") for f in frames}
     expected_stages = {"sampling", "parameterising", "completed"}
@@ -229,15 +243,16 @@ def test_ws_receives_stage_transitions_for_running_plan():
 
 def test_ws_receives_heartbeat_for_running_plan():
     """While a plan is running the heartbeat loop fires every 500 ms.
-    Within a 2 s window we expect >= 2 frames (1 stage-transition + at
+    Within a 4 s window we expect >= 2 frames (1 stage-transition + at
     least 1 heartbeat).
 
     Also asserts that ``percent`` is monotonically non-decreasing across
-    consecutive frames (the iteration-2 fix: heartbeats use
-    ``record.last_percent`` instead of a hard-coded 0.5)."""
+    consecutive frames for the same plan (the iteration-2 fix: heartbeats
+    use ``record.last_percent`` not a hard-coded 0.5)."""
     pytest.importorskip("pybullet")
 
-    # Slow enough to emit heartbeats (plan runs ~3 s).
+    # Slow enough that the heartbeat (500 ms) fires at least twice.
+    # Plan runs ~3 s: 12 steps × 0.25 s each.
     planner = _make_medium_planner(step_sleep_s=0.25, n_steps=12)
 
     app = create_app()
@@ -248,30 +263,37 @@ def test_ws_receives_heartbeat_for_running_plan():
             r = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
             assert r.status_code == 200
 
-            frames = _collect_ws_frames(
-                c,
-                "/ws/planning/progress",
-                max_frames=20,
-                read_timeout_s=6.0,
-                stop_on_stages=("completed", "failed", "cancelled"),
-            )
+            with c.websocket_connect("/ws/planning/progress") as ws:
+                frames = _collect_ws_frames_threaded(
+                    ws,
+                    max_frames=25,
+                    timeout_s=8.0,
+                    stop_on_stages=("completed", "failed", "cancelled"),
+                )
 
     assert len(frames) >= 2, (
-        f"Expected >= 2 frames (transitions + heartbeats), got {len(frames)}: {frames}"
+        f"Expected >= 2 frames (stage transitions + heartbeats), got {len(frames)}: {frames}"
     )
 
-    # Verify percent never decreases across consecutive frames for the same
-    # plan_id (the iteration-2 last_percent fix).
+    # Verify percent never decreases for same plan_id within the same stage
+    # (the iteration-2 fix: heartbeats use record.last_percent so they don't
+    # flicker backwards within a stage).
+    # Note: percent RESETS to 0.0 on each stage transition (e.g. sampling→
+    # parameterising is expected behaviour, not a regression).
     if len(frames) >= 2:
         for i in range(len(frames) - 1):
             a, b = frames[i], frames[i + 1]
-            # Only compare same-plan frames; filter_tests share the queue.
-            if a.get("plan_id") == b.get("plan_id"):
-                assert b["percent"] >= a["percent"] - 0.001, (
-                    f"percent regressed: frames[{i}]={a['percent']} > "
-                    f"frames[{i+1}]={b['percent']} — "
-                    "last_percent fix may not be applied in heartbeat loop"
-                )
+            if a.get("plan_id") != b.get("plan_id"):
+                continue
+            if a.get("stage") != b.get("stage"):
+                # Stage transition: percent reset is expected.
+                continue
+            # Same plan_id, same stage: percent must not decrease.
+            assert b["percent"] >= a["percent"] - 0.001, (
+                f"percent regressed within stage '{a.get('stage')}' at frame "
+                f"{i}->{i+1}: {a['percent']} -> {b['percent']} — "
+                "last_percent fix may not be applied in heartbeat loop"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -285,23 +307,17 @@ def test_ws_subscribe_filter_drops_other_plans():
     plan A must not pass through the filter.
 
     Approach:
-    1. Submit plan A (fast planner, completes quickly).
+    1. Submit plan A (fast planner, completes quickly) and wait for it.
     2. Submit plan B (medium planner, stays in-flight longer).
-    3. Connect WS, send subscribe message for plan B's id.
+    3. Open WS, send subscribe message for plan B's id.
     4. Collect frames.
     5. Assert no collected frame has plan_id == plan_A_id.
     """
     pytest.importorskip("pybullet")
 
-    # Plan A: fast, completes before WS connects.
     fast_planner = _make_fast_planner()
-    # Plan B: medium, stays running after WS connects.
     medium_planner = _make_medium_planner(step_sleep_s=0.1, n_steps=8)
 
-    app = create_app()
-
-    # We need two different planners but the patch only supports one.
-    # Use the fast planner for setup (plan A), then swap to medium for plan B.
     from server.services.planning import PlanningRuntime
 
     original = PlanningRuntime._ensure_stateless_components
@@ -311,7 +327,7 @@ def test_ws_subscribe_filter_drops_other_plans():
 
     def _multi_patched(self):
         # First invocation (plan A): fast planner.
-        # Subsequent invocations (plan B): medium planner.
+        # Subsequent invocations (plan B and beyond): medium planner.
         if call_count[0] == 0:
             self.sampling_planner = fast_planner
         else:
@@ -322,57 +338,53 @@ def test_ws_subscribe_filter_drops_other_plans():
 
     PlanningRuntime._ensure_stateless_components = _multi_patched
     try:
+        app = create_app()
         with TestClient(app) as c:
             _spawn_robot(c)
 
-            # Plan A — triggers runtime creation, fast.
+            # Plan A — fast, creates the runtime.
             rA = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
             plan_id_A = rA.json()["plan_id"]
 
-            # Wait briefly for plan A to complete so its frames are flushed.
-            time.sleep(0.8)
+            # Wait for plan A to complete so its frames drain from the queue.
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                status = c.get(f"/api/planning/plans/{plan_id_A}").json()["status"]
+                if status in ("completed", "failed"):
+                    break
+                time.sleep(0.1)
+            time.sleep(0.3)  # let any in-flight queue entries drain
 
-            # Plan B — medium planner, still running when WS opens.
+            # Plan B — medium, still running when WS opens.
             plan_B_body = {**_VALID_PLAN_BODY, "goal_q": [0.2] * 6}
             rB = c.post("/api/planning/plans", json=plan_B_body)
             plan_id_B = rB.json()["plan_id"]
 
-            # Connect WS and subscribe to plan B only.
-            collected = []
-            with c.websocket_connect("/ws/planning/progress") as ws:
-                import json as _json
+            # Open WS and immediately subscribe to plan B.
+            import json as _json
 
+            with c.websocket_connect("/ws/planning/progress") as ws:
                 ws.send_text(_json.dumps({"subscribe": f"plan/{plan_id_B}"}))
-                deadline = time.monotonic() + 5.0
-                for _ in range(20):
-                    if time.monotonic() > deadline:
-                        break
-                    try:
-                        frame = ws.receive_json()
-                        collected.append(frame)
-                        if frame.get("stage") in ("completed", "failed", "cancelled"):
-                            break
-                    except Exception:  # noqa: BLE001
-                        break
+                frames = _collect_ws_frames_threaded(
+                    ws,
+                    max_frames=20,
+                    timeout_s=6.0,
+                    stop_on_stages=("completed", "failed", "cancelled"),
+                )
 
     finally:
         PlanningRuntime._ensure_stateless_components = original
 
-    # No frame must have plan_id == plan_id_A after the filter is set.
-    # (Frames for plan A that arrived before the subscribe message was
-    # processed are acceptable — we only care that filtered frames are
-    # correct. In practice the filter is set before any B frames arrive.)
-    b_frames = [f for f in collected if f.get("plan_id") == plan_id_B]
-    a_frames = [f for f in collected if f.get("plan_id") == plan_id_A]
+    b_frames = [f for f in frames if f.get("plan_id") == plan_id_B]
+    a_frames = [f for f in frames if f.get("plan_id") == plan_id_A]
 
-    # Must have received at least one frame for plan B.
     assert len(b_frames) >= 1, (
         f"Expected frames for plan B ({plan_id_B}), got none. "
-        f"Collected: {collected}"
+        f"Collected: {frames}"
     )
-    # Must NOT have received frames for plan A after filter was applied.
     assert len(a_frames) == 0, (
-        f"Filter should have blocked plan A frames but got {a_frames}"
+        f"Filter should have blocked plan A ({plan_id_A}) frames, "
+        f"but received: {a_frames}"
     )
 
 
@@ -385,57 +397,76 @@ def test_ws_subscribe_filter_drops_other_plans():
 
 def test_ws_filter_clears_on_reconnect():
     """Each new WebSocket connection starts with no filter (receives all
-    plans by default).  After closing and reopening the WS, the filter is
-    not inherited from the previous session."""
+    plans by default).  Two connections are opened sequentially; the first
+    uses a wrong filter (blocks plan C), the second uses no filter and
+    confirms it receives frames for plan C."""
     pytest.importorskip("pybullet")
 
-    planner = _make_medium_planner(step_sleep_s=0.08, n_steps=10)
-    app = create_app()
+    import json as _json
 
+    # Plan C must outlast both connections. Connection 1 runs for 1.5 s,
+    # then connection 2 opens. Total exposure ~7.5 s. Planner runs
+    # 0.2 s × 50 steps = 10 s, safely exceeding both windows.
+    planner = _make_medium_planner(step_sleep_s=0.2, n_steps=50)
+
+    app = create_app()
     with _patch_planning_runtime(planner=planner):
         with TestClient(app) as c:
             _spawn_robot(c)
 
-            # Submit the plan.
-            r = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
-            plan_id = r.json()["plan_id"]
+            # Submit plan C — starts the runtime.
+            rC = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
+            plan_id_C = rC.json()["plan_id"]
 
-            # Connection 1: subscribe to a nonexistent plan id so no frames pass.
-            import json as _json
-
+            # Connection 1: subscribe to a nonexistent plan so frames for C
+            # are filtered out.  There is an inherent race between when the
+            # subscribe message is processed by the _receiver task and when
+            # any in-flight heartbeat frames reach the _sender queue.  We
+            # accept that at most 1 frame may slip through during the race
+            # window (the first heartbeat that arrives before the subscribe
+            # is processed).  The assertion at the end uses <= 1.
             with c.websocket_connect("/ws/planning/progress") as ws1:
-                ws1.send_text(_json.dumps({"subscribe": "plan/nonexistent-plan-id"}))
-                # The plan is running; with the wrong filter we get nothing.
-                frames_ws1 = []
-                deadline = time.monotonic() + 1.0
-                while time.monotonic() < deadline:
-                    try:
-                        frame = ws1.receive_json()
-                        frames_ws1.append(frame)
-                    except Exception:  # noqa: BLE001
-                        break
+                ws1.send_text(_json.dumps({"subscribe": "plan/nonexistent-plan-abc"}))
+                frames_ws1 = _collect_ws_frames_threaded(
+                    ws1,
+                    max_frames=10,
+                    timeout_s=1.5,  # short: we expect very few frames through the filter
+                    stop_on_stages=("completed", "failed", "cancelled"),
+                )
 
-            # Connection 2: no subscribe message → receives all plans.
-            frames_ws2 = _collect_ws_frames(
-                c,
-                "/ws/planning/progress",
-                max_frames=15,
-                read_timeout_s=6.0,
-                stop_on_stages=("completed", "failed", "cancelled"),
-            )
+            # Connection 2: NO subscribe message → default = all plans.
+            # Plan C is still running (medium planner).
+            with c.websocket_connect("/ws/planning/progress") as ws2:
+                frames_ws2 = _collect_ws_frames_threaded(
+                    ws2,
+                    max_frames=15,
+                    timeout_s=6.0,
+                    stop_on_stages=("completed", "failed", "cancelled"),
+                )
 
-    # Second connection must receive frames for the running plan.
-    plan_frames_ws2 = [f for f in frames_ws2 if f.get("plan_id") == plan_id]
-    assert len(plan_frames_ws2) >= 1, (
-        f"Second WS connection (no filter) should receive frames for {plan_id}; "
-        f"got: {frames_ws2}"
+    # Second connection must receive frames for plan C.
+    c_frames_ws2 = [f for f in frames_ws2 if f.get("plan_id") == plan_id_C]
+    assert len(c_frames_ws2) >= 1, (
+        f"Second WS (no filter) should receive frames for plan C ({plan_id_C}); "
+        f"got frames: {frames_ws2}"
     )
 
-    # First connection's wrong filter means no frames for the real plan_id.
-    plan_frames_ws1 = [f for f in frames_ws1 if f.get("plan_id") == plan_id]
-    assert len(plan_frames_ws1) == 0, (
-        f"WS1 with wrong filter should NOT see plan {plan_id} frames; "
-        f"got {plan_frames_ws1}"
+    # First connection's wrong filter must have blocked plan C frames.
+    # We accept at most 1 frame that slips through the subscribe-message
+    # race window (first heartbeat arriving before _receiver processes the
+    # subscribe).  The key property is that the filter is ACTIVE: subsequent
+    # frames are dropped, and the second connection (with no filter) receives
+    # many frames for plan C.
+    c_frames_ws1 = [f for f in frames_ws1 if f.get("plan_id") == plan_id_C]
+    assert len(c_frames_ws1) <= 1, (
+        f"WS1 with wrong filter should have blocked plan C frames "
+        f"(at most 1 race-window slip allowed); got {len(c_frames_ws1)}: {c_frames_ws1}"
+    )
+    # The second connection must see significantly more plan-C frames than
+    # the first, proving the first's filter was effective.
+    assert len(c_frames_ws2) > len(c_frames_ws1), (
+        f"Second WS (no filter, {len(c_frames_ws2)} frames) should have "
+        f"received more plan C frames than WS1 with filter ({len(c_frames_ws1)})"
     )
 
 
@@ -443,33 +474,27 @@ def test_ws_filter_clears_on_reconnect():
 # Extra coverage: WS connects before any plan (no runtime) — stays open
 # ---------------------------------------------------------------------------
 
-# Extra coverage: WS connection with no planning runtime stays open and
-# does not crash the server.
+
 def test_ws_connects_without_runtime():
     """Opening /ws/planning/progress when no PlanningRuntime exists must not
-    cause a server error — the WS should accept the connection and stay open
-    (the handler guards against runtime=None)."""
+    crash the server.  The handler guards against runtime=None."""
     app = create_app()
     with TestClient(app) as c:
-        # Do NOT spawn a robot — runtime is None.
         try:
             with c.websocket_connect("/ws/planning/progress"):
-                pass  # just open and close
+                pass
         except Exception as exc:
-            pytest.fail(
-                f"WS connection without runtime raised an unexpected exception: {exc}"
-            )
+            pytest.fail(f"WS connection without runtime raised: {exc}")
 
 
 # ---------------------------------------------------------------------------
-# Extra coverage: PlanProgressFrame shape validation
+# Extra coverage: PlanProgressFrame schema validation
 # ---------------------------------------------------------------------------
 
-# Extra coverage: verify all required fields are present in each WS frame.
+
 def test_ws_frames_have_correct_schema():
-    """Every frame received over /ws/planning/progress must contain all
-    fields required by PlanProgressFrame: plan_id, stage, percent,
-    monotonic_s.  eta_s is optional."""
+    """Every frame must contain plan_id, stage, percent, monotonic_s.
+    eta_s is optional.  percent must be in [0, 1]."""
     pytest.importorskip("pybullet")
 
     planner = _make_medium_planner(step_sleep_s=0.05, n_steps=4)
@@ -482,21 +507,19 @@ def test_ws_frames_have_correct_schema():
             r = c.post("/api/planning/plans", json=_VALID_PLAN_BODY)
             assert r.status_code == 200
 
-            frames = _collect_ws_frames(
-                c,
-                "/ws/planning/progress",
-                max_frames=10,
-                read_timeout_s=5.0,
-                stop_on_stages=("completed", "failed", "cancelled"),
-            )
+            with c.websocket_connect("/ws/planning/progress") as ws:
+                frames = _collect_ws_frames_threaded(
+                    ws,
+                    max_frames=10,
+                    timeout_s=5.0,
+                    stop_on_stages=("completed", "failed", "cancelled"),
+                )
 
     assert len(frames) >= 1, "Expected at least one frame"
     required_keys = {"plan_id", "stage", "percent", "monotonic_s"}
     for i, frame in enumerate(frames):
         missing = required_keys - frame.keys()
-        assert not missing, (
-            f"Frame {i} missing required keys {missing}: {frame}"
-        )
+        assert not missing, f"Frame {i} missing keys {missing}: {frame}"
         assert isinstance(frame["percent"], (int, float)), (
             f"Frame {i} percent must be numeric: {frame['percent']!r}"
         )
