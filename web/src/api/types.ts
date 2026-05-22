@@ -494,3 +494,118 @@ export interface PlanProgressFrame {
   eta_s: number | null;
   monotonic_s: number;
 }
+
+// ---------------------------------------------------------------------------
+// I/O models (Phase 4)
+// ---------------------------------------------------------------------------
+
+export type SignalKindModel = "digital_in" | "digital_out" | "analog_in" | "analog_out";
+
+export type ConnectionProtocolModel = "modbus_tcp" | "modbus_rtu" | "opcua" | "mqtt";
+
+export type ConnectionStatusKind =
+  | "disconnected"
+  | "connecting"
+  | "open"
+  | "error"
+  | "closing";
+
+export interface ModbusTcpConfigModel {
+  protocol: "modbus_tcp";
+  host: string;
+  port: number;
+  unit_id: number;
+  timeout_s: number;
+}
+
+export interface ModbusRtuConfigModel {
+  protocol: "modbus_rtu";
+  device: string;
+  baudrate: number;
+  parity: "N" | "E" | "O";
+  stopbits: 1 | 2;
+  bytesize: 7 | 8;
+  unit_id: number;
+  timeout_s: number;
+}
+
+export interface OpcUaConfigModel {
+  protocol: "opcua";
+  url: string;
+  namespace: number;
+  username: string | null;
+  password: string | null;
+}
+
+export interface MqttConfigModel {
+  protocol: "mqtt";
+  host: string;
+  port: number;
+  client_id: string;
+  username: string | null;
+  password: string | null;
+  keepalive_s: number;
+  qos: 0 | 1 | 2;
+}
+
+export type ConnectionConfigModel =
+  | ModbusTcpConfigModel
+  | ModbusRtuConfigModel
+  | OpcUaConfigModel
+  | MqttConfigModel;
+
+export interface SignalSpecModel {
+  name: string;
+  kind: SignalKindModel;
+  address: string;
+  scale: number;
+  offset: number;
+  poll_interval_s: number | null;
+}
+
+export interface IoConnectionStatusModel {
+  name: string;
+  config: ConnectionConfigModel;
+  status: ConnectionStatusKind;
+  last_error: string | null;
+  connected_at: number | null;
+  signals: SignalSpecModel[];
+}
+
+export type IoValueModel = boolean | number;
+
+export interface IoValueSnapshotModel {
+  connection: string;
+  signal: string;
+  kind: SignalKindModel;
+  value: IoValueModel;
+  monotonic_s: number;
+}
+
+export type IoEventTypeModel =
+  | "connection_changed"
+  | "value_changed"
+  | "write_ack"
+  | "error";
+
+export interface IoEventModel {
+  type: IoEventTypeModel;
+  connection: string;
+  signal: string | null;
+  value: IoValueModel | null;
+  status: ConnectionStatusKind | null;
+  error_code: string | null;
+  error_message: string | null;
+  monotonic_s: number;
+}
+
+export interface WriteSignalRequest {
+  value: IoValueModel;
+}
+
+export interface WriteSignalResponse {
+  connection: string;
+  signal: string;
+  value: IoValueModel;
+  monotonic_s: number;
+}

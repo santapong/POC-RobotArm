@@ -14,6 +14,7 @@ import { useTelemetry } from "./ws/useTelemetry";
 import { useEvents } from "./ws/useEvents";
 import { useVisionDetections } from "./ws/useVisionDetections";
 import { usePlanProgress } from "./ws/usePlanProgress";
+import { useIoEvents } from "./ws/useIoEvents";
 import { useCatalogStore } from "./store/catalog";
 import { useStationStore } from "./store/station";
 import { getCatalog } from "./api/robots";
@@ -25,6 +26,7 @@ export default function App() {
   useEvents();
   useVisionDetections();
   usePlanProgress();
+  useIoEvents();
 
   const setCatalog = useCatalogStore((s) => s.setCatalog);
   const setStation = useStationStore((s) => s.setStation);
