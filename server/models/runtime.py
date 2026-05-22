@@ -71,6 +71,7 @@ class RunStart(BaseModel):
 
     procedure_name: str = "main"
     dt_s: float = 0.01
+    planner: Literal["linear", "rrt"] = "linear"
 
 
 class RunRecord(BaseModel):

@@ -232,7 +232,7 @@ class VisionRuntime:
         frame, ts = self.get_latest_frame(camera_name)
         detector = self.detectors[detector_name]
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         detections = await loop.run_in_executor(
             self.detector_executor, detector.detect, frame
         )
@@ -270,7 +270,7 @@ class VisionRuntime:
         if key in self.live_tasks:
             return  # already running
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         task = loop.create_task(
             self._live_loop(detector_name, camera_name, rate_hz),
             name=f"live_{detector_name}_{camera_name}",
@@ -292,7 +292,7 @@ class VisionRuntime:
     ) -> None:
         """Continuous detection loop; publishes to subscriber queues."""
         interval = 1.0 / max(rate_hz, 0.1)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         while True:
             await asyncio.sleep(interval)
             try:

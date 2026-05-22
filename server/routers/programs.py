@@ -19,6 +19,7 @@ import uuid
 from fastapi import APIRouter, Depends
 
 from server.models.motion import ProgramModel
+from server.models.planning import PlannerConfigModel, PlannerKindModel, PlanRequestModel
 from server.models.runtime import PostRequest, PostResponse, RunRecord, RunStart
 from server.services.errors import http_error
 from server.services.programs import get_program, list_programs
@@ -169,6 +170,51 @@ async def run_program(
     return {"run_id": run_id}
 
 
+def _move_to_plan_request(step, current_q: list[float], runtime, station) -> PlanRequestModel:
+    """Build a ``PlanRequestModel`` from a MOVE_L / MOVE_J / MOVE_C step.
+
+    Uses the step's ``PoseTarget`` as the Cartesian goal and all station
+    fixtures as obstacles. Falls back to the step target's joints for
+    MOVE_ABS_J / joint-target MOVE_J.
+    """
+    from src.motion.ir import PoseTarget
+
+    target = step.target
+    goal_q = None
+    goal_pose_xyz_m = None
+    goal_pose_quat_wxyz = None
+
+    if isinstance(target, PoseTarget):
+        goal_pose_xyz_m = list(target.xyz_m)
+        goal_pose_quat_wxyz = list(target.quat_wxyz)
+    else:
+        # JointTarget fallback.
+        goal_q = list(target.q_rad)
+
+    obstacle_names = [f.name for f in station.fixtures]
+
+    return PlanRequestModel(
+        robot_id=runtime.catalog_name,
+        q_start=list(current_q),
+        goal_q=goal_q,
+        goal_pose_xyz_m=goal_pose_xyz_m,
+        goal_pose_quat_wxyz=goal_pose_quat_wxyz,
+        obstacles=obstacle_names,
+        planner=PlannerConfigModel(kind=PlannerKindModel.RRT_STAR),
+    )
+
+
+async def _wait_complete(record, timeout: float = 60.0) -> None:
+    """Wait for a ``_PlanRunRecord.future`` to finish."""
+
+    if record.future is None:
+        return
+    try:
+        await asyncio.wait_for(asyncio.wrap_future(record.future), timeout=timeout)
+    except (asyncio.TimeoutError, Exception):  # noqa: BLE001
+        pass
+
+
 async def _run_program_task(session: Session, run_id: str, prog, runtime, body: RunStart) -> None:
     """Background task: interpolate and play the program through the bridge."""
     from src.motion.path import interpolate_program
@@ -181,6 +227,9 @@ async def _run_program_task(session: Session, run_id: str, prog, runtime, body: 
     )
 
     try:
+        if body.planner == "rrt":
+            await _run_program_task_rrt(session, run_id, prog, runtime, body)
+            return
 
         def _play(sim):
             try:
@@ -228,6 +277,108 @@ async def _run_program_task(session: Session, run_id: str, prog, runtime, body: 
         await session.push_event(
             {"type": "run_failed", "payload": {"run_id": run_id, "error": str(exc)}}
         )
+
+
+async def _run_program_task_rrt(
+    session: Session, run_id: str, prog, runtime, body: RunStart
+) -> None:
+    """RRT-planner path: route Cartesian moves through PlanningRuntime."""
+    from server.models.planning import PlanStatusModel
+    from server.services.planning import PlanningRuntime
+
+    if session.planning_runtime is None:
+        session.planning_runtime = PlanningRuntime(
+            catalog_name=runtime.catalog_name,
+            station_provider=lambda: session.station,
+        )
+
+    from src.motion.ir import Move, MoveKind
+
+    # Obtain current joint angles as starting configuration.
+    def _get_joints(sim):
+        return list(sim.get_joint_angles())
+
+    try:
+        current_q = await asyncio.to_thread(runtime.bridge.submit, _get_joints)
+    except Exception:  # noqa: BLE001
+        current_q = [0.0] * runtime.dof
+
+    waypoints: list[list[float]] = []
+
+    for procedure in prog.procedures:
+        for step in procedure.body:
+            if not isinstance(step, Move):
+                continue
+            if step.kind not in (MoveKind.MOVE_L, MoveKind.MOVE_C, MoveKind.MOVE_J):
+                continue
+
+            req_model = _move_to_plan_request(step, current_q, runtime, session.station)
+            try:
+                domain_req = req_model.to_domain()
+            except ValueError as exc:
+                _mark_failed(session, run_id, f"PLANNING_BAD_CONFIG: {exc}")
+                await session.push_event(
+                    {"type": "run_failed", "payload": {"run_id": run_id, "error": str(exc)}}
+                )
+                return
+
+            rec = await session.planning_runtime.plan(domain_req)
+            await _wait_complete(rec)
+
+            if rec.status != PlanStatusModel.COMPLETED:
+                msg = (rec.result.error_message or "no path") if rec.result else "no path"
+                _mark_failed(session, run_id, f"PLANNING_FAILED: {msg}")
+                await session.push_event(
+                    {"type": "run_failed", "payload": {"run_id": run_id, "error": msg}}
+                )
+                return
+
+            step_waypoints = [list(s.q_rad) for s in rec.result.trajectory.samples]
+            waypoints.extend(step_waypoints)
+            if step_waypoints:
+                current_q = step_waypoints[-1]
+
+    if not waypoints:
+        # No Cartesian moves — nothing to execute.
+        session.runs[run_id] = RunRecord(
+            run_id=run_id,
+            program_id=session.runs[run_id].program_id,
+            status="completed",
+            created_at=session.runs[run_id].created_at,
+            finished_at=time.time(),
+        )
+        await session.push_event(
+            {"type": "run_completed", "payload": {"run_id": run_id, "error": None}}
+        )
+        return
+
+    runtime.bridge.start_trajectory(waypoints, body.dt_s)
+
+    session.runs[run_id] = RunRecord(
+        run_id=run_id,
+        program_id=session.runs[run_id].program_id,
+        status="completed",
+        created_at=session.runs[run_id].created_at,
+        finished_at=time.time(),
+    )
+    await session.push_event(
+        {"type": "run_completed", "payload": {"run_id": run_id, "error": None}}
+    )
+
+
+def _mark_failed(session: Session, run_id: str, error: str) -> None:
+    """Update run record to failed status."""
+    rec = session.runs.get(run_id)
+    if rec is None:
+        return
+    session.runs[run_id] = RunRecord(
+        run_id=rec.run_id,
+        program_id=rec.program_id,
+        status="failed",
+        created_at=rec.created_at,
+        finished_at=time.time(),
+        error=error,
+    )
 
 
 __all__ = ["router"]

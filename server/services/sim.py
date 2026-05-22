@@ -61,7 +61,7 @@ class SimRuntime:
 
     def start(self) -> None:
         """Schedule the background tick and telemetry tasks on the running loop."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._tick_task = loop.create_task(self._tick_loop(), name="sim_tick")
         self._telemetry_task = loop.create_task(
             self._telemetry_loop(), name="sim_telemetry"

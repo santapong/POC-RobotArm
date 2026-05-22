@@ -55,6 +55,7 @@ def map_exception(exc: Exception) -> tuple[int, ErrorResponse]:
     - ``NotImplementedError`` → 501 ``NOT_SUPPORTED``
     - ``RuntimeError("not initialized")`` or ``RuntimeError("SIM_DISCONNECTED")`` → 503
     - ``TimeoutError`` / ``FuturesTimeoutError`` → 504 ``SIM_TIMEOUT``
+    - Planning-domain exceptions → see planning error codes below.
     - Anything else → 500 ``INTERNAL_ERROR``
     """
     # Import lazily to avoid circular dep on sim / domain modules at startup.
@@ -63,11 +64,65 @@ def map_exception(exc: Exception) -> tuple[int, ErrorResponse]:
     except ImportError:
         LimitsExceeded = None  # type: ignore[assignment, misc]
 
+    # Lazy planning-lib imports (Linux/macOS only; safe to fail on Windows).
+    try:
+        from src.planning.budgets import PlanCancelled, PlanTimeout
+        from src.planning.ik import PlanningIKUnreachable
+        from src.planning.parameteriser import PlanLimitsExceeded
+        from src.planning.samplers import PlanNoSolution
+        from src.planning.types import PlanningUnavailable
+    except ImportError:
+        PlanCancelled = PlanTimeout = PlanNoSolution = None  # type: ignore[assignment, misc]
+        PlanLimitsExceeded = PlanningIKUnreachable = PlanningUnavailable = None  # type: ignore[assignment, misc]
+
     if LimitsExceeded is not None and isinstance(exc, LimitsExceeded):
         return 409, ErrorResponse(
             detail=str(exc),
             code="LIMITS_EXCEEDED",
             violations=[v.to_dict() for v in exc.violations],
+        )
+
+    # Planning-specific exceptions — checked before the generic ValueError /
+    # RuntimeError branches because some planning exceptions inherit from those.
+    if PlanningUnavailable is not None and isinstance(exc, PlanningUnavailable):
+        return 422, ErrorResponse(
+            detail=str(exc),
+            code="PLANNING_UNAVAILABLE",
+            hint=(
+                "Planning libraries (OMPL / Drake / toppra) require Linux or macOS. "
+                "Windows users: install via WSL (see docs/planning-setup.md)."
+            ),
+        )
+
+    if PlanCancelled is not None and isinstance(exc, PlanCancelled):
+        return 409, ErrorResponse(
+            detail=str(exc),
+            code="PLANNING_CANCELLED",
+        )
+
+    if PlanNoSolution is not None and isinstance(exc, PlanNoSolution):
+        return 409, ErrorResponse(
+            detail=str(exc),
+            code="PLANNING_NO_SOLUTION",
+        )
+
+    if PlanningIKUnreachable is not None and isinstance(exc, PlanningIKUnreachable):
+        return 409, ErrorResponse(
+            detail=str(exc),
+            code="PLANNING_IK_UNREACHABLE",
+        )
+
+    if PlanLimitsExceeded is not None and isinstance(exc, PlanLimitsExceeded):
+        return 409, ErrorResponse(
+            detail=str(exc),
+            code="PLANNING_LIMITS_EXCEEDED",
+            violations=[{"singularity_hint": list(exc.singularity_hint)}],
+        )
+
+    if PlanTimeout is not None and isinstance(exc, PlanTimeout):
+        return 504, ErrorResponse(
+            detail=str(exc),
+            code="PLANNING_TIMEOUT",
         )
 
     if isinstance(exc, KeyError):
