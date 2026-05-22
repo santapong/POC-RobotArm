@@ -21,6 +21,7 @@ from server.services.sim import SimRuntime
 from src.station.scene import Frame, Station
 
 if TYPE_CHECKING:
+    from server.services.io import IoRuntime
     from server.services.planning import PlanningRuntime
     from server.services.vision import VisionRuntime
 
@@ -77,6 +78,7 @@ class Session:
         self.sim_runtime: Optional[SimRuntime] = None
         self.vision_runtime: Optional["VisionRuntime"] = None
         self.planning_runtime: Optional["PlanningRuntime"] = None
+        self.io_runtime: Optional["IoRuntime"] = None
         self.runs: dict[str, RunRecord] = {}
         self.assets: dict[str, _AssetRecord] = {}
         self.lock: asyncio.Lock = asyncio.Lock()

@@ -75,6 +75,20 @@ def map_exception(exc: Exception) -> tuple[int, ErrorResponse]:
         PlanCancelled = PlanTimeout = PlanNoSolution = None  # type: ignore[assignment, misc]
         PlanLimitsExceeded = PlanningIKUnreachable = PlanningUnavailable = None  # type: ignore[assignment, misc]
 
+    # Lazy I/O-lib imports (requires [io] extra; safe to fail on all platforms).
+    try:
+        from src.io.errors import (
+            IoConnectionError,
+            IoNotConnected,
+            IoProtocolError,
+            IoSignalKindMismatch,
+            IoTimeout,
+            IoUnavailable,
+        )
+    except ImportError:
+        IoConnectionError = IoNotConnected = IoProtocolError = None  # type: ignore[assignment, misc]
+        IoSignalKindMismatch = IoTimeout = IoUnavailable = None  # type: ignore[assignment, misc]
+
     if LimitsExceeded is not None and isinstance(exc, LimitsExceeded):
         return 409, ErrorResponse(
             detail=str(exc),
@@ -123,6 +137,45 @@ def map_exception(exc: Exception) -> tuple[int, ErrorResponse]:
         return 504, ErrorResponse(
             detail=str(exc),
             code="PLANNING_TIMEOUT",
+        )
+
+    # I/O-specific exceptions — checked before generic ValueError / RuntimeError
+    # branches because some I/O exceptions inherit from RuntimeError.
+    if IoUnavailable is not None and isinstance(exc, IoUnavailable):
+        return 422, ErrorResponse(
+            detail=str(exc),
+            code="IO_UNAVAILABLE",
+            hint="Install the [io] extra: pip install 'poc-robotarm[io]'",
+        )
+
+    if IoConnectionError is not None and isinstance(exc, IoConnectionError):
+        return 503, ErrorResponse(
+            detail=str(exc),
+            code="IO_CONNECTION_FAILED",
+        )
+
+    if IoNotConnected is not None and isinstance(exc, IoNotConnected):
+        return 503, ErrorResponse(
+            detail=str(exc),
+            code="IO_NOT_CONNECTED",
+        )
+
+    if IoProtocolError is not None and isinstance(exc, IoProtocolError):
+        return 502, ErrorResponse(
+            detail=str(exc),
+            code="IO_PROTOCOL_ERROR",
+        )
+
+    if IoSignalKindMismatch is not None and isinstance(exc, IoSignalKindMismatch):
+        return 422, ErrorResponse(
+            detail=str(exc),
+            code="IO_SIGNAL_KIND_MISMATCH",
+        )
+
+    if IoTimeout is not None and isinstance(exc, IoTimeout):
+        return 504, ErrorResponse(
+            detail=str(exc),
+            code="IO_TIMEOUT",
         )
 
     if isinstance(exc, KeyError):

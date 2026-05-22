@@ -58,6 +58,13 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await session.vision_runtime.stop()
         except Exception:  # noqa: BLE001
             pass
+    # Shutdown: stop IoRuntime if active (before planning — programs that use
+    # both I/O + planning should drain I/O first).
+    if session.io_runtime is not None:
+        try:
+            await session.io_runtime.stop()
+        except Exception:  # noqa: BLE001
+            pass
     # Shutdown: stop PlanningRuntime if active.
     if session.planning_runtime is not None:
         try:
@@ -132,12 +139,14 @@ def create_app() -> FastAPI:
     # ------------------------------------------------------------------
     from server.routers.assets import router as assets_router
     from server.routers.health import router as health_router
+    from server.routers.io import router as io_router
     from server.routers.planning import router as planning_router
     from server.routers.programs import router as programs_router
     from server.routers.robots import router as robots_router
     from server.routers.station import router as station_router
     from server.routers.vision import router as vision_router
     from server.ws.events import router as events_router
+    from server.ws.io import router as io_ws_router
     from server.ws.planning import router as planning_ws_router
     from server.ws.telemetry import router as telemetry_router
     from server.ws.vision import router as vision_ws_router
@@ -149,10 +158,12 @@ def create_app() -> FastAPI:
     app.include_router(station_router)
     app.include_router(vision_router)
     app.include_router(planning_router)
+    app.include_router(io_router)
     app.include_router(events_router)
     app.include_router(telemetry_router)
     app.include_router(vision_ws_router)
     app.include_router(planning_ws_router)
+    app.include_router(io_ws_router)
 
     # ------------------------------------------------------------------
     # Static files
