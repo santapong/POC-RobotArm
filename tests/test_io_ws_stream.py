@@ -325,20 +325,18 @@ def test_ws_receives_at_least_one_frame_via_reconnect():
     assert len(frames) >= 1, f"Expected at least 1 frame via WS, got: {frames}"
 
 
-def test_ws_receives_value_changed_event():
-    """WS /ws/io/stream delivers a frame with type=value_changed when the runtime publishes one.
+def test_ws_event_type_field_populated_from_io_event_kind():
+    """WS /ws/io/stream frame's ``type`` field is populated from ``IoEvent.kind``.
 
-    We use the IoRuntime._publish path via a connection_changed event that carries
-    the right kind string. Because driving a real value_changed through a round-trip
-    adapter poll would require a live poll loop, we assert that at minimum the frame
-    schema is correct: any frame that arrives with type=value_changed must carry the
-    required fields (type, connection, monotonic_s). This is always satisfied by
-    test_ws_frames_have_correct_schema, which runs schema checks on every frame.
+    Locks the per-frame ``kind`` -> ``type`` translation in ``server/ws/io.py``:
+    a reconnect-triggered ``connection_changed`` event must surface as
+    ``type == "connection_changed"`` over the wire, not as a hardcoded literal.
 
-    Here we verify specifically that a reconnect-triggered connection_changed frame
-    has ``type == "connection_changed"`` — i.e. that the type field is populated from
-    the IoEvent.kind, not hardcoded. A genuine value_changed event would pass the same
-    schema assertions; we cannot drive one deterministically without the poll loop.
+    Phase 4 known limitation: a genuine ``value_changed`` event cannot be driven
+    deterministically from a sync TestClient (requires the adapter poll loop).
+    The schema check ``test_ws_frames_have_correct_schema`` covers ``value_changed``
+    structurally for any frame that does arrive; full value_changed injection is
+    a Phase 5 follow-up via a direct ``IoRuntime._publish`` test hook.
     """
     def _factory(_cfg):
         return _SilentStubAdapter()
