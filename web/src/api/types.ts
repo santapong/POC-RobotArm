@@ -391,3 +391,106 @@ export interface GraspPreviewResponse {
   applied: boolean;
   error: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Planning models (Phase 3)
+// ---------------------------------------------------------------------------
+
+export type PlannerKindModel = "rrt" | "rrt_star" | "prm";
+export type PlanStageModel =
+  | "queued"
+  | "ik"
+  | "sampling"
+  | "optimizing"
+  | "parameterising"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type PlanStatusModel = "running" | "completed" | "failed" | "cancelled";
+
+export interface PlannerConfigModel {
+  kind: PlannerKindModel;
+  timeout_s: number;
+  smoothing_iterations: number;
+  range_rad: number;
+  clearance_m: number;
+  qdd_max_rad_s2_default: number | null;
+}
+
+export interface OptimizerConfigModel {
+  enabled: boolean;
+  max_iterations: number;
+  min_distance_m: number;
+  spline_degree: 3 | 5;
+}
+
+export interface ParameteriserConfigModel {
+  qd_scale: number;
+  qdd_scale: number;
+  grid_points: number;
+}
+
+export interface PlanRequestModel {
+  robot_id: string;
+  q_start: number[];
+  goal_q: number[] | null;
+  goal_pose_xyz_m: [number, number, number] | null;
+  goal_pose_quat_wxyz: [number, number, number, number] | null;
+  obstacles: string[];
+  planner: PlannerConfigModel;
+  optimizer: OptimizerConfigModel;
+  parameteriser: ParameteriserConfigModel;
+}
+
+export interface TrajectorySampleModel {
+  t_s: number;
+  q_rad: number[];
+  qd_rad_s: number[];
+  qdd_rad_s2: number[];
+}
+
+export interface TimedTrajectoryModel {
+  robot_id: string;
+  dt_s: number;
+  samples: TrajectorySampleModel[];
+  duration_s: number;
+}
+
+export interface PlanRunRecord {
+  plan_id: string;
+  status: PlanStatusModel;
+  stage: PlanStageModel;
+  request: PlanRequestModel;
+  created_at: number;
+  finished_at: number | null;
+  elapsed_s: number | null;
+  sampler_path_length: number;
+  optimizer_iterations: number;
+  parameteriser_grid_points: number;
+  cache_hit: boolean;
+  error_code: string | null;
+  error_message: string | null;
+  singularity_hint: number[];
+  trajectory: TimedTrajectoryModel | null;
+}
+
+export interface PlanCreateResponse {
+  plan_id: string;
+  status: PlanStatusModel;
+}
+
+export interface PlanExecuteRequest {
+  dt_s: number;
+}
+
+export interface PlanExecuteResponse {
+  run_id: string;
+}
+
+export interface PlanProgressFrame {
+  plan_id: string;
+  stage: PlanStageModel;
+  percent: number;
+  eta_s: number | null;
+  monotonic_s: number;
+}

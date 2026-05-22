@@ -13,6 +13,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CodePanel } from "./CodePanel";
 import { VisionPanel } from "./VisionPanel";
+import { PlanPanel } from "./PlanPanel";
 
 export function BottomPanel() {
   const [expanded, setExpanded] = useState(false);
@@ -39,6 +40,12 @@ export function BottomPanel() {
             >
               Vision
             </TabsTrigger>
+            <TabsTrigger
+              value="plan"
+              className="rounded-none border-b-2 border-transparent px-3 py-1 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:text-foreground"
+            >
+              Plan
+            </TabsTrigger>
           </TabsList>
 
           {/* Expand/collapse chevron */}
@@ -58,6 +65,10 @@ export function BottomPanel() {
 
         <TabsContent value="vision" className="mt-0 min-h-0 flex-1 overflow-hidden">
           <VisionPanel />
+        </TabsContent>
+
+        <TabsContent value="plan" className="mt-0 min-h-0 flex-1 overflow-hidden">
+          <PlanPanel />
         </TabsContent>
       </Tabs>
     </div>

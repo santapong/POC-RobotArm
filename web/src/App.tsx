@@ -13,6 +13,7 @@ import { AboutDialog } from "./components/AboutDialog";
 import { useTelemetry } from "./ws/useTelemetry";
 import { useEvents } from "./ws/useEvents";
 import { useVisionDetections } from "./ws/useVisionDetections";
+import { usePlanProgress } from "./ws/usePlanProgress";
 import { useCatalogStore } from "./store/catalog";
 import { useStationStore } from "./store/station";
 import { getCatalog } from "./api/robots";
@@ -23,6 +24,7 @@ export default function App() {
   useTelemetry();
   useEvents();
   useVisionDetections();
+  usePlanProgress();
 
   const setCatalog = useCatalogStore((s) => s.setCatalog);
   const setStation = useStationStore((s) => s.setStation);
