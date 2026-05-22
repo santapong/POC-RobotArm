@@ -93,3 +93,22 @@ jobs:
       - run: pnpm install
       - run: pnpm typecheck
       - run: pnpm build
+
+  test-planning:
+    name: Planning tests
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (sim + planning + dev)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[sim,planning,dev]"
+      - name: Run planning tests
+        run: make test-planning
+        env:
+          PLANNING_E2E: "0"
