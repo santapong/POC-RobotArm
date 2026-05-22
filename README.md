@@ -12,6 +12,8 @@ server/   FastAPI app exposing the library to the web UI
 web/      React + Vite + R3F frontend (replacing the legacy PySide6 desktop)
 ```
 
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full architecture reference (process model, subsystems, session state, error contract, WebSocket taxonomy, IR types).
+
 ## Phased roadmap
 
 - **Phase 0 — Foundation** (this commit): Python 3.12 floor, FastAPI skeleton (`GET /health`, `WebSocket /ws/telemetry` stub), Vite + React + R3F scaffold with placeholder canvas, Makefile targets `make server` / `make web`, README rewrite.
