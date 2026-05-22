@@ -80,6 +80,7 @@ class Session:
         self.planning_runtime: Optional["PlanningRuntime"] = None
         self.io_runtime: Optional["IoRuntime"] = None
         self.runs: dict[str, RunRecord] = {}
+        self.run_tasks: dict[str, asyncio.Task] = {}
         self.assets: dict[str, _AssetRecord] = {}
         self.lock: asyncio.Lock = asyncio.Lock()
         self._events: asyncio.Queue[dict] = asyncio.Queue(maxsize=256)

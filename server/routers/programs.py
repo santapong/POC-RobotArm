@@ -30,6 +30,41 @@ from server.services.session import Session, get_session
 router = APIRouter(prefix="/api/programs")
 
 
+def _io_exc_to_code(exc: Exception) -> str:
+    """Map an IO runtime exception to its IO_* code prefix."""
+    import src.io.errors as io_errors
+
+    mapping = {
+        io_errors.IoNotConnected: "IO_NOT_CONNECTED",
+        io_errors.IoTimeout: "IO_TIMEOUT",
+        io_errors.IoSignalKindMismatch: "IO_SIGNAL_KIND_MISMATCH",
+        io_errors.IoUnknownSignal: "IO_SIGNAL_UNKNOWN",
+        io_errors.IoProtocolError: "IO_PROTOCOL_ERROR",
+        io_errors.IoConnectionError: "IO_CONNECTION_ERROR",
+    }
+    for cls, code in mapping.items():
+        if isinstance(exc, cls):
+            return code
+    if isinstance(exc, KeyError):
+        return "IO_CONNECTION_UNKNOWN"  # connection name not registered
+    return "IO_ERROR"
+
+
+async def _wait_for_bridge_idle(bridge: Any, timeout_s: float) -> None:
+    """Poll bridge.trajectory_status() until active=False or timeout.
+
+    Phase 4 dependency: added to guard against destructive start_trajectory
+    calls overwriting an in-progress trajectory.
+    """
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    while asyncio.get_running_loop().time() < deadline:
+        status = await asyncio.to_thread(bridge.trajectory_status)
+        if not status.get("active", False):
+            return
+        await asyncio.sleep(0.05)  # 50 ms poll
+    raise RuntimeError(f"bridge did not become idle within {timeout_s}s")
+
+
 @router.get("")
 async def list_programs_endpoint() -> list[dict]:
     """Return the list of available programs."""
@@ -63,6 +98,10 @@ async def stop_run(
 
     if session.sim_runtime is not None:
         session.sim_runtime.bridge.cancel_trajectory()
+
+    task = session.run_tasks.get(run_id)
+    if task is not None and not task.done():
+        task.cancel()
 
     updated = RunRecord(
         run_id=record.run_id,
@@ -166,7 +205,9 @@ async def run_program(
     runtime = session.sim_runtime
 
     # Run asynchronously in the background.
-    asyncio.create_task(_run_program_task(session, run_id, prog, runtime, body))
+    task = asyncio.create_task(_run_program_task(session, run_id, prog, runtime, body))
+    session.run_tasks[run_id] = task
+    task.add_done_callback(lambda _: session.run_tasks.pop(run_id, None))
 
     await session.push_event({"type": "run_started", "payload": {"run_id": run_id, "error": None}})
     return {"run_id": run_id}
@@ -271,31 +312,45 @@ async def _execute_io_step(
 
     Raises
     ------
-    HTTPException (503)
-        If ``session.io_runtime`` has not been initialised yet.
+    RuntimeError
+        If ``session.io_runtime`` has not been initialised yet (IO_NOT_INITIALIZED),
+        or if an IO runtime call fails (IO_* coded prefix).
     """
     from src.motion.ir import IfSignal, SetSignal, WaitSignal
 
     iohost = session.io_runtime
     if iohost is None:
-        raise http_error(503, "IO_NOT_INITIALIZED", "I/O runtime not started")
+        raise RuntimeError("IO_NOT_INITIALIZED: I/O runtime not started")
 
     if isinstance(step, SetSignal):
-        await iohost.write(step.connection, step.signal, step.value)
+        try:
+            await iohost.write(step.connection, step.signal, step.value)
+        except Exception as exc:
+            raise RuntimeError(f"{_io_exc_to_code(exc)}: {exc}") from exc
 
     elif isinstance(step, WaitSignal):
-        await iohost.wait_for_signal(
-            step.connection,
-            step.signal,
-            predicate=lambda v: _eval_predicate(v, step.op, step.value),
-            timeout_s=step.timeout_s,
-        )
+        try:
+            await iohost.wait_for_signal(
+                step.connection,
+                step.signal,
+                predicate=lambda v: _eval_predicate(v, step.op, step.value),
+                timeout_s=step.timeout_s,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"{_io_exc_to_code(exc)}: {exc}") from exc
 
     elif isinstance(step, IfSignal):
-        snap = await iohost.read(step.connection, step.signal)
+        try:
+            event = await iohost.read(step.connection, step.signal)
+        except Exception as exc:
+            raise RuntimeError(f"{_io_exc_to_code(exc)}: {exc}") from exc
+        if event.value is None:
+            raise RuntimeError(
+                f"IO_NOT_CONNECTED: signal {step.connection}/{step.signal} has no value yet"
+            )
         body = (
             step.then_body
-            if _eval_predicate(snap.value if snap.value is not None else 0, step.op, step.value)
+            if _eval_predicate(event.value, step.op, step.value)
             else step.else_body
         )
         await on_branch(list(body))
@@ -328,6 +383,11 @@ async def _run_program_task(session: Session, run_id: str, prog, runtime, body: 
             for step in procedure.body
         )
 
+        # Fail fast: if the program needs I/O but the runtime is absent, do not
+        # run half the program before discovering the problem.
+        if has_io_steps and session.io_runtime is None:
+            raise RuntimeError("IO_NOT_INITIALIZED: I/O runtime not started")
+
         if not has_io_steps:
             # --- Original batch path (unchanged) ---
             def _play(sim):
@@ -354,22 +414,12 @@ async def _run_program_task(session: Session, run_id: str, prog, runtime, body: 
 
         else:
             # --- Step-by-step path for programs with I/O steps ---
-            # Move steps are batched per-procedure; I/O steps run in the order
-            # they appear in the body.  Within each procedure: collect Move steps
-            # into one batch, play them through the bridge, then execute any I/O
-            # steps that follow (in body order).
-            #
-            # Recursive helper for IfSignal.then_body / else_body.
-            async def _run_body(steps: list[Any]) -> None:
-                move_steps_inner = [s for s in steps if isinstance(s, Move)]
-                if move_steps_inner:
-                    _play_moves_inner(move_steps_inner)
-                for step_inner in steps:
-                    if isinstance(step_inner, (SetSignal, WaitSignal, IfSignal)):
-                        await _execute_io_step(session, step_inner, on_branch=_run_body)
+            # Move steps are flushed immediately before each I/O step to preserve
+            # source order.  IfSignal branches recurse through _run_body which
+            # uses the same step-by-step logic.
 
-            def _play_moves_inner(moves_list: list[Any]) -> None:
-                """Run a list of Move steps synchronously through the bridge."""
+            async def _flush_moves(moves_list: list[Any]) -> None:
+                """Interpolate moves, start trajectory, and wait for bridge idle."""
                 if not moves_list:
                     return
                 try:
@@ -381,10 +431,13 @@ async def _run_program_task(session: Session, run_id: str, prog, runtime, body: 
                 except Exception:  # noqa: BLE001
                     robot = None
 
+                waypoints_ref: list[list[float]] = []
+
                 def _play_inner(sim):
                     if robot is None:
                         home = sim.get_joint_angles()
                         runtime.bridge.start_trajectory([home], body.dt_s)
+                        waypoints_ref.append(home)
                         return
                     # Build a mini-program with only these moves for interpolation.
                     from src.motion.ir import Procedure, Program
@@ -401,30 +454,36 @@ async def _run_program_task(session: Session, run_id: str, prog, runtime, body: 
                     path = interpolate_program(
                         mini_prog, robot, dt_s=body.dt_s, raise_on_violation=False
                     )
-                    waypoints = [list(s.q_rad) for s in path.samples]
-                    runtime.bridge.start_trajectory(waypoints, body.dt_s)
+                    wps = [list(s.q_rad) for s in path.samples]
+                    runtime.bridge.start_trajectory(wps, body.dt_s)
+                    waypoints_ref.extend(wps)
 
-                runtime.bridge.submit(_play_inner)
+                await asyncio.to_thread(runtime.bridge.submit, _play_inner)
+                # Wait until the bridge finishes executing this batch before
+                # proceeding to the next step (prevents start_trajectory from
+                # wiping an in-progress trajectory).
+                n = len(waypoints_ref)
+                timeout_s = max(n, 1) * body.dt_s + 5.0
+                await _wait_for_bridge_idle(runtime.bridge, timeout_s)
+
+            async def _run_body(steps: list[Any]) -> None:
+                """Execute a mixed step sequence preserving source order."""
+                move_batch: list[Any] = []
+                for step_inner in steps:
+                    if isinstance(step_inner, Move):
+                        move_batch.append(step_inner)
+                    else:
+                        if move_batch:
+                            await _flush_moves(move_batch)
+                            move_batch.clear()
+                        if isinstance(step_inner, (SetSignal, WaitSignal, IfSignal)):
+                            await _execute_io_step(session, step_inner, on_branch=_run_body)
+                        # Comment / IOOp are no-ops for execution.
+                if move_batch:
+                    await _flush_moves(move_batch)
 
             for procedure in prog.procedures:
-                move_steps: list[Any] = []
-                for step in procedure.body:
-                    if isinstance(step, Move):
-                        move_steps.append(step)
-                    elif isinstance(step, (SetSignal, WaitSignal, IfSignal)):
-                        # Flush accumulated Move steps first.
-                        if move_steps:
-                            await asyncio.to_thread(
-                                lambda ms=move_steps: _play_moves_inner(ms)  # noqa: B023
-                            )
-                            move_steps = []
-                        await _execute_io_step(session, step, on_branch=_run_body)
-                    # IOOp / Wait / Comment are ignored (post-processor-only).
-                # Flush any remaining Move steps at end of procedure.
-                if move_steps:
-                    await asyncio.to_thread(
-                        lambda ms=move_steps: _play_moves_inner(ms)  # noqa: B023
-                    )
+                await _run_body(list(procedure.body))
 
         session.runs[run_id] = RunRecord(
             run_id=run_id,
@@ -436,6 +495,12 @@ async def _run_program_task(session: Session, run_id: str, prog, runtime, body: 
         await session.push_event(
             {"type": "run_completed", "payload": {"run_id": run_id, "error": None}}
         )
+    except asyncio.CancelledError:
+        _mark_failed(session, run_id, "RUN_CANCELLED: stopped by user")
+        await session.push_event(
+            {"type": "run_failed", "payload": {"run_id": run_id, "error": "RUN_CANCELLED: stopped by user"}}
+        )
+        raise
     except Exception as exc:  # noqa: BLE001
         session.runs[run_id] = RunRecord(
             run_id=run_id,
@@ -480,11 +545,9 @@ async def _run_program_task_rrt(
     except Exception:  # noqa: BLE001
         current_q = [0.0] * runtime.dof
 
-    has_waypoints = False
-
     async def _run_body_rrt(steps: list[Any]) -> None:
         """Recursive helper for IfSignal branches in the RRT path."""
-        nonlocal current_q, has_waypoints
+        nonlocal current_q
         for step_inner in steps:
             if isinstance(step_inner, Move):
                 if step_inner.kind not in (MoveKind.MOVE_L, MoveKind.MOVE_C, MoveKind.MOVE_J):
@@ -503,53 +566,62 @@ async def _run_program_task_rrt(
                 if step_waypoints:
                     runtime.bridge.start_trajectory(step_waypoints, body.dt_s)
                     current_q = step_waypoints[-1]
-                    has_waypoints = True
+                    timeout_s = len(step_waypoints) * body.dt_s + 5.0
+                    await _wait_for_bridge_idle(runtime.bridge, timeout_s)
             elif isinstance(step_inner, (SetSignal, WaitSignal, IfSignal)):
                 await _execute_io_step(session, step_inner, on_branch=_run_body_rrt)
 
-    for procedure in prog.procedures:
-        for step in procedure.body:
-            if isinstance(step, Move):
-                if step.kind not in (MoveKind.MOVE_L, MoveKind.MOVE_C, MoveKind.MOVE_J):
-                    continue
+    try:
+        for procedure in prog.procedures:
+            for step in procedure.body:
+                if isinstance(step, Move):
+                    if step.kind not in (MoveKind.MOVE_L, MoveKind.MOVE_C, MoveKind.MOVE_J):
+                        continue
 
-                req_model = _move_to_plan_request(step, current_q, runtime, session.station)
-                try:
-                    domain_req = req_model.to_domain()
-                except ValueError as exc:
-                    _mark_failed(session, run_id, f"PLANNING_BAD_CONFIG: {exc}")
-                    await session.push_event(
-                        {"type": "run_failed", "payload": {"run_id": run_id, "error": str(exc)}}
-                    )
-                    return
+                    req_model = _move_to_plan_request(step, current_q, runtime, session.station)
+                    try:
+                        domain_req = req_model.to_domain()
+                    except ValueError as exc:
+                        _mark_failed(session, run_id, f"PLANNING_BAD_CONFIG: {exc}")
+                        await session.push_event(
+                            {"type": "run_failed", "payload": {"run_id": run_id, "error": str(exc)}}
+                        )
+                        return
 
-                rec = await session.planning_runtime.plan(domain_req)
-                await _wait_complete(rec)
+                    rec = await session.planning_runtime.plan(domain_req)
+                    await _wait_complete(rec)
 
-                if rec.status != PlanStatusModel.COMPLETED:
-                    msg = (rec.result.error_message or "no path") if rec.result else "no path"
-                    _mark_failed(session, run_id, f"PLANNING_FAILED: {msg}")
-                    await session.push_event(
-                        {"type": "run_failed", "payload": {"run_id": run_id, "error": msg}}
-                    )
-                    return
+                    if rec.status != PlanStatusModel.COMPLETED:
+                        msg = (rec.result.error_message or "no path") if rec.result else "no path"
+                        _mark_failed(session, run_id, f"PLANNING_FAILED: {msg}")
+                        await session.push_event(
+                            {"type": "run_failed", "payload": {"run_id": run_id, "error": msg}}
+                        )
+                        return
 
-                step_waypoints = [list(s.q_rad) for s in rec.result.trajectory.samples]
-                if step_waypoints:
-                    runtime.bridge.start_trajectory(step_waypoints, body.dt_s)
-                    current_q = step_waypoints[-1]
-                    has_waypoints = True
+                    step_waypoints = [list(s.q_rad) for s in rec.result.trajectory.samples]
+                    if step_waypoints:
+                        runtime.bridge.start_trajectory(step_waypoints, body.dt_s)
+                        current_q = step_waypoints[-1]
+                        timeout_s = len(step_waypoints) * body.dt_s + 5.0
+                        await _wait_for_bridge_idle(runtime.bridge, timeout_s)
 
-            elif isinstance(step, (SetSignal, WaitSignal, IfSignal)):
-                try:
-                    await _execute_io_step(session, step, on_branch=_run_body_rrt)
-                except Exception as exc:  # noqa: BLE001
-                    _mark_failed(session, run_id, str(exc))
-                    await session.push_event(
-                        {"type": "run_failed", "payload": {"run_id": run_id, "error": str(exc)}}
-                    )
-                    return
-            # IOOp / Wait / Comment ignored (post-processor-only types).
+                elif isinstance(step, (SetSignal, WaitSignal, IfSignal)):
+                    try:
+                        await _execute_io_step(session, step, on_branch=_run_body_rrt)
+                    except Exception as exc:  # noqa: BLE001
+                        _mark_failed(session, run_id, str(exc))
+                        await session.push_event(
+                            {"type": "run_failed", "payload": {"run_id": run_id, "error": str(exc)}}
+                        )
+                        return
+                # IOOp / Wait / Comment ignored (post-processor-only types).
+    except asyncio.CancelledError:
+        _mark_failed(session, run_id, "RUN_CANCELLED: stopped by user")
+        await session.push_event(
+            {"type": "run_failed", "payload": {"run_id": run_id, "error": "RUN_CANCELLED: stopped by user"}}
+        )
+        raise
 
     session.runs[run_id] = RunRecord(
         run_id=run_id,

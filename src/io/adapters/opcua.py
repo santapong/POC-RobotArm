@@ -7,8 +7,13 @@ Notes
 -----
 * Phase 4 is anonymous-only — no certificate or username/password auth is
   implemented even though :class:`OpcUaConfig` carries those fields.
-* Address format: ``"i=42"`` (numeric node id) or ``"s=MyTag"`` (string node
-  id) in the namespace specified by ``config.namespace``.
+* Address format — supported variants (see :func:`_parse_opcua_address`):
+
+  * ``"i=42"`` — numeric identifier in default namespace (``config.namespace``).
+  * ``"ns=2;i=42"`` — numeric identifier with explicit namespace index.
+  * ``"s=MyTag"`` — string identifier in default namespace.
+  * ``"ns=2;s=MyTag"`` — string identifier with explicit namespace index.
+
 * OPC-UA natively supports push (monitored items / subscriptions), so
   ``watch()`` uses a subscription rather than polling.  ``asyncio.sleep``
   with a short interval is used as a fallback heartbeat so the generator
@@ -57,6 +62,9 @@ class OpcUaAdapter(IoAdapter):
         self._config = config
         self._client: object | None = None
         self._connected = False
+        # Populated in connect(): maps (namespace_idx, identifier) → SignalSpec.
+        # Built per-connection so the lookup is O(1) and structurally correct.
+        self._signal_lookup: dict[tuple[int, str | int], SignalSpec] = {}
 
     @property
     def capabilities(self) -> AdapterCapabilities:
@@ -66,24 +74,50 @@ class OpcUaAdapter(IoAdapter):
             supports_analog=True,
         )
 
-    def _node_id(self, address: str) -> object:
-        """Build an asyncua NodeId from the address string."""
-        from asyncua import ua
+    def _parse_opcua_address(self, address: str) -> tuple[int, str | int]:
+        """Parse an OPC-UA address string into ``(namespace_idx, identifier)``.
 
-        # address is e.g. "i=42" or "s=MyTag"
-        if "=" not in address:
-            raise ValueError(
-                f"OPC-UA address must be 'i=<n>' or 's=<tag>', got {address!r}"
-            )
-        kind, raw = address.split("=", 1)
+        Supported formats
+        -----------------
+        * ``"i=42"`` — numeric identifier in default namespace.
+        * ``"ns=2;i=42"`` — numeric identifier with explicit namespace.
+        * ``"s=MyTag"`` — string identifier in default namespace.
+        * ``"ns=2;s=MyTag"`` — string identifier with explicit namespace.
+
+        Returns
+        -------
+        (namespace_idx, identifier)
+            ``namespace_idx`` is an ``int``; ``identifier`` is ``int`` for
+            numeric node ids and ``str`` for string node ids.
+        """
         ns = self._config.namespace
+        rest = address
+
+        if address.startswith("ns="):
+            # Split "ns=2;i=42" → ns_part="ns=2", rest="i=42"
+            semicolon = address.index(";")
+            ns = int(address[3:semicolon])
+            rest = address[semicolon + 1 :]
+
+        if "=" not in rest:
+            raise ValueError(
+                f"OPC-UA address must include 'i=<n>' or 's=<tag>', got {address!r}"
+            )
+        kind, raw = rest.split("=", 1)
         if kind == "i":
-            return ua.NodeId(int(raw), ns)
+            return ns, int(raw)
         if kind == "s":
-            return ua.NodeId(raw, ns)
+            return ns, raw
         raise ValueError(
             f"OPC-UA address kind must be 'i' (numeric) or 's' (string), got {kind!r}"
         )
+
+    def _node_id_from_address(self, address: str) -> object:
+        """Build an asyncua NodeId from the address string."""
+        from asyncua import ua
+
+        ns, identifier = self._parse_opcua_address(address)
+        return ua.NodeId(identifier, ns)
 
     async def connect(self) -> None:
         """Open the OPC-UA connection."""
@@ -119,7 +153,7 @@ class OpcUaAdapter(IoAdapter):
         """Return the asyncua Node object for ``signal``."""
         if self._client is None:
             raise IoNotConnected(f"OPC-UA not connected to {self._config.url}")
-        node_id = self._node_id(signal.address)
+        node_id = self._node_id_from_address(signal.address)
         return self._client.get_node(node_id)  # type: ignore[union-attr]
 
     async def read(self, signal: SignalSpec) -> IoEvent:
@@ -132,7 +166,7 @@ class OpcUaAdapter(IoAdapter):
             node = await self._get_node(signal)
             raw = await asyncio.wait_for(
                 node.read_value(),  # type: ignore[union-attr]
-                timeout=5.0,
+                timeout=self._config.timeout_s,
             )
         except asyncio.TimeoutError as exc:
             raise IoTimeout(
@@ -179,7 +213,7 @@ class OpcUaAdapter(IoAdapter):
             dv = ua.DataValue(ua.Variant(value))
             await asyncio.wait_for(
                 node.write_value(dv),  # type: ignore[union-attr]
-                timeout=5.0,
+                timeout=self._config.timeout_s,
             )
         except asyncio.TimeoutError as exc:
             raise IoTimeout(
@@ -215,6 +249,12 @@ class OpcUaAdapter(IoAdapter):
 
         from asyncua.ua.uaerrors import UaError
 
+        # Build a structural lookup: (namespace_idx, identifier) → SignalSpec.
+        # This avoids the substring-match bug — "i=2" must NOT match "ns=2;i=12".
+        sig_lookup: dict[tuple[int, str | int], SignalSpec] = {
+            self._parse_opcua_address(s.address): s for s in signals
+        }
+
         # Queue receives events from the subscription callback (thread-safe path
         # via call_soon_threadsafe in the asyncua callback).
         queue: asyncio.Queue[IoEvent] = asyncio.Queue()
@@ -223,23 +263,18 @@ class OpcUaAdapter(IoAdapter):
         class _Handler:
             """asyncua subscription handler that forwards data changes to the queue."""
 
-            def __init__(self, conn: str, sigs: Sequence[SignalSpec]) -> None:
+            def __init__(self, conn: str, lookup: dict[tuple[int, str | int], SignalSpec]) -> None:
                 self._conn = conn
-                # Map node id string → SignalSpec for lookup in callback.
-                self._sig_map = {s.address: s for s in sigs}
+                self._lookup = lookup
 
             def datachange_notification(
                 self, node: object, val: object, data: object
             ) -> None:
                 # Called from asyncua's internal task — use call_soon_threadsafe.
                 try:
-                    node_id_str = node.nodeid.to_string()  # type: ignore[union-attr]
-                    # Match by numeric or string id.
-                    sig = None
-                    for addr, s in self._sig_map.items():
-                        if addr in node_id_str or node_id_str.endswith(addr.split("=", 1)[-1]):
-                            sig = s
-                            break
+                    nid = node.nodeid  # type: ignore[union-attr]
+                    key = (nid.NamespaceIndex, nid.Identifier)
+                    sig = self._lookup.get(key)
                     if sig is None:
                         return
                     from src.io.types import SignalKind
@@ -260,7 +295,7 @@ class OpcUaAdapter(IoAdapter):
                 except Exception:
                     pass  # Never raise in a subscription callback
 
-        handler = _Handler(conn=self._config.url, sigs=signals)
+        handler = _Handler(conn=self._config.url, lookup=sig_lookup)
         subscription: object | None = None
         try:
             subscription = await self._client.create_subscription(  # type: ignore[union-attr]

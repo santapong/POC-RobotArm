@@ -342,7 +342,7 @@ async def update_signals(
     domain_signals = [_signal_spec_to_domain(s) for s in body]
 
     try:
-        slot = await session.io_runtime.update_signal_map(name, domain_signals)
+        slot = await session.io_runtime.update_signals(name, domain_signals)
     except KeyError:
         raise http_error(404, "IO_CONNECTION_UNKNOWN", f"Connection '{name}' not found.")
     except IoSignalKindMismatch as exc:
@@ -367,6 +367,8 @@ async def get_all_values(
         try:
             slot = runtime.get_connection(event.connection)
         except KeyError:
+            continue
+        if event.signal not in slot.signals:
             continue
         result.append(_cached_event_to_snapshot(event, slot))
     return result
@@ -394,6 +396,8 @@ async def get_connection_values(
     result = []
     for event in events:
         if event.value is None or event.signal is None:
+            continue
+        if event.signal not in slot.signals:
             continue
         result.append(_cached_event_to_snapshot(event, slot))
     return result

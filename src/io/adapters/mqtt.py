@@ -129,8 +129,11 @@ class MqttAdapter(IoAdapter):
     async def read(self, signal: SignalSpec) -> IoEvent:
         """Return the last received value for ``signal`` (cached from watch).
 
-        MQTT is push-only; this returns the cached value from the watch loop.
-        If no value has been received yet, subscribes once and waits.
+        MQTT is push-only.  read() returns the last value seen by watch(); it
+        does not synchronously fetch.  If watch() has not yet seen a message for
+        this signal, raises :class:`~src.io.errors.IoNotConnected` with a
+        descriptive message — do not open a second ``client.messages`` iterator
+        as aiomqtt v2 supports only one consumer per client.
         """
         if not self._connected or self._client is None:
             raise IoNotConnected(
@@ -145,35 +148,11 @@ class MqttAdapter(IoAdapter):
                 value=cached,
                 monotonic_s=time.monotonic(),
             )
-        # No cached value — subscribe and wait for one message.
-        import aiomqtt
-
-        qos = signal.qos if signal.qos is not None else self._config.qos
-        try:
-            await asyncio.wait_for(
-                self._client.subscribe(signal.address, qos=qos),  # type: ignore[union-attr]
-                timeout=5.0,
-            )
-            async with asyncio.timeout(5.0):
-                async for msg in self._client.messages:  # type: ignore[union-attr]
-                    if str(msg.topic) == signal.address:
-                        value = self._decode_payload(msg.payload, signal)  # type: ignore[arg-type]
-                        self._last_values[signal.address] = value
-                        return IoEvent(
-                            connection=self._config.host,
-                            kind="value_changed",
-                            signal=signal.name,
-                            value=value,
-                            monotonic_s=time.monotonic(),
-                        )
-        except asyncio.TimeoutError as exc:
-            raise IoTimeout(
-                f"MQTT read of topic {signal.address!r} timed out"
-            ) from exc
-        except aiomqtt.MqttError as exc:
-            raise IoProtocolError(f"MQTT read of topic {signal.address!r} failed: {exc}") from exc
-
-        raise IoTimeout(f"MQTT read of topic {signal.address!r}: no message received")
+        # No cached value yet — signal has not been seen via watch().
+        raise IoNotConnected(
+            f"MQTT signal {signal.address!r} not yet seen; "
+            "subscribe via watch() first or wait for the broker to publish"
+        )
 
     async def write(self, signal: SignalSpec, value: bool | int | float) -> IoEvent:
         """Publish a value to the signal's MQTT topic."""
@@ -187,8 +166,11 @@ class MqttAdapter(IoAdapter):
         payload = self._encode_payload(value)
         try:
             await asyncio.wait_for(
+                # retain=True: industrial last-known-state semantics — new subscribers
+                # receive the current value immediately without waiting for the next publish.
+                # Per-signal retain config is deferred to a follow-up phase.
                 self._client.publish(signal.address, payload=payload, qos=qos, retain=True),  # type: ignore[union-attr]
-                timeout=5.0,
+                timeout=self._config.timeout_s,
             )
         except asyncio.TimeoutError as exc:
             raise IoTimeout(

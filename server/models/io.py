@@ -128,6 +128,7 @@ class OpcUaConfigModel(BaseModel):
     namespace: int = Field(default=2, ge=0)
     username: Optional[str] = None
     password: Optional[str] = None
+    timeout_s: float = Field(default=5.0, gt=0)
 
 
 class MqttConfigModel(BaseModel):
@@ -143,6 +144,7 @@ class MqttConfigModel(BaseModel):
     password: Optional[str] = None
     keepalive_s: int = Field(default=60, ge=1)
     qos: Literal[0, 1, 2] = 0
+    timeout_s: float = Field(default=5.0, gt=0)
 
 
 # Discriminated union — Pydantic v2 uses the ``protocol`` field to select the

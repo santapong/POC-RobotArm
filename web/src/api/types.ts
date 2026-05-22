@@ -535,6 +535,7 @@ export interface OpcUaConfigModel {
   namespace: number;
   username: string | null;
   password: string | null;
+  timeout_s: number;
 }
 
 export interface MqttConfigModel {
@@ -546,6 +547,7 @@ export interface MqttConfigModel {
   password: string | null;
   keepalive_s: number;
   qos: 0 | 1 | 2;
+  timeout_s: number;
 }
 
 export type ConnectionConfigModel =

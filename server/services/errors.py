@@ -84,10 +84,12 @@ def map_exception(exc: Exception) -> tuple[int, ErrorResponse]:
             IoSignalKindMismatch,
             IoTimeout,
             IoUnavailable,
+            IoUnknownSignal,
         )
     except ImportError:
         IoConnectionError = IoNotConnected = IoProtocolError = None  # type: ignore[assignment, misc]
         IoSignalKindMismatch = IoTimeout = IoUnavailable = None  # type: ignore[assignment, misc]
+        IoUnknownSignal = None  # type: ignore[assignment, misc]
 
     if LimitsExceeded is not None and isinstance(exc, LimitsExceeded):
         return 409, ErrorResponse(
@@ -176,6 +178,12 @@ def map_exception(exc: Exception) -> tuple[int, ErrorResponse]:
         return 504, ErrorResponse(
             detail=str(exc),
             code="IO_TIMEOUT",
+        )
+
+    if IoUnknownSignal is not None and isinstance(exc, IoUnknownSignal):
+        return 404, ErrorResponse(
+            detail=str(exc),
+            code="IO_SIGNAL_UNKNOWN",
         )
 
     if isinstance(exc, KeyError):

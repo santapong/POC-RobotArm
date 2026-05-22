@@ -76,6 +76,7 @@ const DEFAULT_OPCUA: OpcUaConfigModel = {
   namespace: 2,
   username: null,
   password: null,
+  timeout_s: 5.0,
 };
 
 const DEFAULT_MQTT: MqttConfigModel = {
@@ -87,6 +88,7 @@ const DEFAULT_MQTT: MqttConfigModel = {
   password: null,
   keepalive_s: 60,
   qos: 0,
+  timeout_s: 5.0,
 };
 
 function defaultConfig(protocol: ConnectionProtocolModel): ConnectionConfigModel {

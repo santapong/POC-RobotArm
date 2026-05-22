@@ -229,18 +229,30 @@ class ModbusRtuAdapter(IoAdapter):
             raise ModbusIOException(f"Modbus RTU write error response: {rr}")
 
     async def watch(self, signals: Sequence[SignalSpec]) -> AsyncIterator[IoEvent]:  # type: ignore[override]
-        """Poll all signals and yield value-changed events indefinitely."""
+        """Poll all signals and yield value-changed events indefinitely.
+
+        After 5 consecutive read failures on the **same** signal, the exception
+        is re-raised so the runtime's ``_watch_loop`` can mark the connection as
+        ERROR rather than silently swallowing persistent faults.
+        """
         if not signals:
             while True:
                 await asyncio.sleep(1.0)
 
         last_values: dict[str, bool | int | float | None] = {s.name: None for s in signals}
+        # Count consecutive failures per signal; reset to 0 on any success.
+        fail_counts: dict[str, int] = {s.name: 0 for s in signals}
+        _MAX_CONSECUTIVE_FAILURES = 5
 
         while True:
             for sig in signals:
                 try:
                     event = await self.read(sig)
+                    fail_counts[sig.name] = 0
                 except Exception:
+                    fail_counts[sig.name] += 1
+                    if fail_counts[sig.name] >= _MAX_CONSECUTIVE_FAILURES:
+                        raise
                     continue
 
                 if last_values[sig.name] != event.value:

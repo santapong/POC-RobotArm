@@ -8,7 +8,7 @@ Notes
 -----
 * All connection lifecycle operations are protected by ``IoRuntime.lock``
   (an ``asyncio.Lock``) to serialise ``add_connection``, ``remove_connection``,
-  and ``update_signal_map``.  Adapter calls (``connect``, ``disconnect``) happen
+  and ``update_signals``.  Adapter calls (``connect``, ``disconnect``) happen
   **outside** the lock to avoid stalling other connections during a slow handshake.
 * Per-connection write serialisation is provided by ``_ConnectionSlot.write_lock``
   (``asyncio.Lock``), preventing interleaving of concurrent REST writes and
@@ -22,11 +22,16 @@ Notes
   3 s.  ``stop()`` cancels all and awaits within 5 s.
 * ``asyncio.CancelledError`` propagates through every adapter method — the
   watch loop unwinds cleanly on cancellation without leaving sockets open.
+* Auto-reconnect is **client-driven only** in Phase 4.  If a watch loop
+  terminates with an error (status=ERROR), the operator must POST
+  ``/api/io/connections/{name}/reconnect`` to re-establish the connection.
+  The runtime does not attempt any automatic reconnection.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -51,6 +56,8 @@ from src.io.types import (
 )
 
 __all__ = ["IoRuntime"]
+
+_log = logging.getLogger(__name__)
 
 _REMOVE_TIMEOUT_S = 3.0
 _STOP_TIMEOUT_S = 5.0
@@ -82,7 +89,7 @@ class IoRuntime:
 
     def __init__(self) -> None:
         self._connections: dict[str, _ConnectionSlot] = {}
-        # Serialises lifecycle mutations (add / remove / update_signal_map).
+        # Serialises lifecycle mutations (add / remove / update_signals).
         self.lock: asyncio.Lock = asyncio.Lock()
         # Guards _last_values; threading.Lock so sync GET routes don't suspend.
         self._values_lock: threading.Lock = threading.Lock()
@@ -144,7 +151,9 @@ class IoRuntime:
         except asyncio.CancelledError:
             raise  # propagate for clean task teardown
         except Exception:
-            # Transient adapter failure — mark slot as error; runtime may reconnect.
+            # Adapter failure — mark slot as error. Auto-reconnect is client-driven
+            # (operator must POST /api/io/connections/{name}/reconnect).
+            _log.exception("watch loop %s failed", slot.name)
             slot.status = ConnectionStatusKind.ERROR
             self._publish(
                 IoEvent(
@@ -278,8 +287,115 @@ class IoRuntime:
             )
         )
 
+    async def connect(self, name: str) -> _ConnectionSlot:
+        """Connect an existing disconnected slot without destroying it.
+
+        Calls ``adapter.connect()`` and sets ``status=open``.  If the slot is
+        already open this is a no-op (returns the slot unchanged).  To replace
+        the connection config entirely, use :meth:`remove_connection` followed
+        by :meth:`add_connection`.
+
+        Raises
+        ------
+        KeyError
+            If ``name`` is not a known connection.
+        IoConnectionError
+            If the adapter fails to connect.
+        """
+        async with self.lock:
+            slot = self._connections.get(name)
+            if slot is None:
+                raise KeyError(name)
+
+        if slot.status == ConnectionStatusKind.OPEN:
+            return slot
+
+        timeout = getattr(slot.config, "timeout_s", _CONNECT_DEFAULT_TIMEOUT_S)
+        try:
+            await asyncio.wait_for(slot.adapter.connect(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise IoConnectionError(
+                f"Connection {name!r} timed out after {timeout} s"
+            ) from exc
+
+        async with self.lock:
+            # Re-validate: another coroutine may have removed/replaced the slot.
+            if self._connections.get(name) is not slot:
+                return slot
+            slot.status = ConnectionStatusKind.OPEN
+            slot.connected_at = time.monotonic()
+            old_task = slot.watch_task
+            slot.watch_task = asyncio.get_running_loop().create_task(
+                self._watch_loop(slot), name=f"io_watch_{name}"
+            )
+
+        # Cancel old watch task outside the lock.
+        if old_task is not None and not old_task.done():
+            old_task.cancel()
+            try:
+                await old_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        self._publish(
+            IoEvent(
+                connection=name,
+                kind="connection_changed",
+                status=ConnectionStatusKind.OPEN.value,
+                monotonic_s=time.monotonic(),
+            )
+        )
+        return slot
+
+    async def disconnect(self, name: str) -> _ConnectionSlot:
+        """Disconnect an existing slot without removing it.
+
+        Calls ``adapter.disconnect()``, cancels the watch task, and sets
+        ``status=disconnected``.  The slot remains in the registry so it can
+        be reconnected later via :meth:`connect` or :meth:`reconnect`.
+
+        Raises
+        ------
+        KeyError
+            If ``name`` is not a known connection.
+        """
+        async with self.lock:
+            slot = self._connections.get(name)
+            if slot is None:
+                raise KeyError(name)
+            old_task = slot.watch_task
+            slot.watch_task = None
+            slot.status = ConnectionStatusKind.DISCONNECTED
+
+        if old_task is not None and not old_task.done():
+            old_task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(old_task), timeout=_REMOVE_TIMEOUT_S
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass
+
+        try:
+            await slot.adapter.disconnect()
+        except Exception:
+            pass
+
+        self._publish(
+            IoEvent(
+                connection=name,
+                kind="connection_changed",
+                status=ConnectionStatusKind.DISCONNECTED.value,
+                monotonic_s=time.monotonic(),
+            )
+        )
+        return slot
+
     async def reconnect(self, name: str) -> _ConnectionSlot:
-        """Disconnect and reconnect with the same config and signal map.
+        """Disconnect then reconnect an existing slot (same config and signal map).
+
+        This is the operator-facing endpoint for recovering a dropped connection.
+        It preserves the slot — config and signals are unchanged.
 
         Raises
         ------
@@ -289,16 +405,20 @@ class IoRuntime:
             If the new connection fails.
         """
         async with self.lock:
-            if name not in self._connections:
+            slot = self._connections.get(name)
+            if slot is None:
                 raise KeyError(name)
-            old_slot = self._connections[name]
 
-        signals = list(old_slot.signals.values())
-        config = old_slot.config
-        await self.remove_connection(name)
-        return await self.add_connection(name, config, signals)
+        await self.disconnect(name)
 
-    async def update_signal_map(
+        async with self.lock:
+            # Re-validate after disconnect: another coroutine could have removed the slot.
+            if self._connections.get(name) is not slot:
+                raise KeyError(name)
+
+        return await self.connect(name)
+
+    async def update_signals(
         self,
         name: str,
         signals: Sequence[SignalSpec],
@@ -314,28 +434,28 @@ class IoRuntime:
             If ``name`` is not a known connection.
         """
         async with self.lock:
-            if name not in self._connections:
+            slot = self._connections.get(name)
+            if slot is None:
                 raise KeyError(name)
-            slot = self._connections[name]
+            # Snapshot the watch task and update signals while holding the lock.
+            old_task = slot.watch_task
+            slot.signals = {s.name: s for s in signals}
 
-        # Cancel the existing watch task.
-        if slot.watch_task is not None and not slot.watch_task.done():
-            slot.watch_task.cancel()
+        # Cancel and await the old task OUTSIDE the lock to avoid blocking other connections.
+        if old_task is not None and not old_task.done():
+            old_task.cancel()
             try:
-                await asyncio.wait_for(
-                    asyncio.shield(slot.watch_task), timeout=_REMOVE_TIMEOUT_S
-                )
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+                await old_task
+            except (asyncio.CancelledError, Exception):
                 pass
 
-        # Replace signal map.
-        slot.signals = {s.name: s for s in signals}
-
-        # Restart watch task with new signal map.
-        task = asyncio.get_running_loop().create_task(
-            self._watch_loop(slot), name=f"io_watch_{name}"
-        )
-        slot.watch_task = task
+        async with self.lock:
+            # Re-validate: connection may have been removed/replaced during the gap.
+            if self._connections.get(name) is not slot:
+                return slot
+            slot.watch_task = asyncio.get_running_loop().create_task(
+                self._watch_loop(slot), name=f"io_watch_{name}"
+            )
 
         self._publish(
             IoEvent(
@@ -472,12 +592,12 @@ class IoRuntime:
                 )
             event = await slot.adapter.write(sig, value)
 
-        # Emit write_ack to subscribers.
+        # Use the adapter's reported wire value (not the caller's input) for the ack.
         ack = IoEvent(
             connection=connection,
             kind="write_ack",
             signal=signal,
-            value=value,
+            value=event.value,
             monotonic_s=event.monotonic_s,
         )
         self._publish(ack)

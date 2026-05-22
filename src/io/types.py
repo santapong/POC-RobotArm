@@ -143,6 +143,7 @@ class OpcUaConfig:
 
     url: str
     namespace: int = 2
+    timeout_s: float = 5.0
     username: str | None = None
     password: str | None = None
     protocol: Literal["opcua"] = "opcua"
@@ -152,6 +153,8 @@ class OpcUaConfig:
             raise ValueError("OpcUaConfig.url must not be empty")
         if self.namespace < 0:
             raise ValueError(f"OpcUaConfig.namespace must be >= 0, got {self.namespace}")
+        if self.timeout_s <= 0.0:
+            raise ValueError(f"OpcUaConfig.timeout_s must be > 0, got {self.timeout_s}")
 
 
 @dataclass(frozen=True)
@@ -160,6 +163,7 @@ class MqttConfig:
 
     host: str
     port: int = 1883
+    timeout_s: float = 5.0
     client_id: str = ""
     username: str | None = None
     password: str | None = None
@@ -172,6 +176,8 @@ class MqttConfig:
             raise ValueError("MqttConfig.host must not be empty")
         if not (1 <= self.port <= 65535):
             raise ValueError(f"MqttConfig.port must be 1-65535, got {self.port}")
+        if self.timeout_s <= 0.0:
+            raise ValueError(f"MqttConfig.timeout_s must be > 0, got {self.timeout_s}")
         if self.keepalive_s < 1:
             raise ValueError(f"MqttConfig.keepalive_s must be >= 1, got {self.keepalive_s}")
         if self.qos not in (0, 1, 2):
@@ -278,15 +284,15 @@ class IoEvent:
     signal: str | None = None
     value: bool | int | float | None = None
     status: str | None = None
-    monotonic_s: float = 0.0
+    monotonic_s: float | None = None
 
     def __post_init__(self) -> None:
         if not self.connection:
             raise ValueError("IoEvent.connection must not be empty")
         if self.kind not in ("connection_changed", "value_changed", "write_ack", "error"):
             raise ValueError(f"IoEvent.kind {self.kind!r} is not a valid event kind")
-        # Default monotonic timestamp to now if caller passed the default sentinel.
-        if self.monotonic_s == 0.0:
+        # Resolve None sentinel to now; a caller-supplied value (including 0.0) is kept as-is.
+        if self.monotonic_s is None:
             object.__setattr__(self, "monotonic_s", time.monotonic())
 
 

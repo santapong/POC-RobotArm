@@ -26,6 +26,13 @@ Notes
   inside the async context manager body so the module is importable on all
   platforms; import-time failures are avoided.
 * The RTU server task is cancelled cleanly on ``__aexit__``.
+* **Readiness probe limitation**: serial/pty does not expose a socket-level
+  readiness signal the way TCP does.  A fixed 150 ms ``asyncio.sleep`` is used
+  after task creation to give pymodbus time to open the pty.  On heavily loaded
+  CI machines this sleep may expire before the server is ready, causing a latent
+  test flake.  If flakes are observed, increase the sleep to 300 ms or add a
+  retry loop in the test fixture.  A proper readiness probe for serial
+  connections is deferred to a future phase.
 """
 
 from __future__ import annotations

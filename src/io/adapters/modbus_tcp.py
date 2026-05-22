@@ -235,6 +235,10 @@ class ModbusTcpAdapter(IoAdapter):
         Polls each signal at ``signal.poll_interval_s`` (or the default) and
         yields an :class:`IoEvent` whenever the value differs from the cached
         last value.  Uses ``asyncio.sleep`` for pacing — never ``time.sleep``.
+
+        After 5 consecutive read failures on the **same** signal, the exception
+        is re-raised so the runtime's ``_watch_loop`` can mark the connection as
+        ERROR rather than silently swallowing persistent faults.
         """
         if not signals:
             # Nothing to watch; yield nothing and wait for cancellation.
@@ -242,13 +246,19 @@ class ModbusTcpAdapter(IoAdapter):
                 await asyncio.sleep(1.0)
 
         last_values: dict[str, bool | int | float | None] = {s.name: None for s in signals}
+        # Count consecutive failures per signal; reset to 0 on any success.
+        fail_counts: dict[str, int] = {s.name: 0 for s in signals}
+        _MAX_CONSECUTIVE_FAILURES = 5
 
         while True:
             for sig in signals:
                 try:
                     event = await self.read(sig)
+                    fail_counts[sig.name] = 0
                 except Exception:
-                    # Transient read failure — skip this tick rather than killing the loop.
+                    fail_counts[sig.name] += 1
+                    if fail_counts[sig.name] >= _MAX_CONSECUTIVE_FAILURES:
+                        raise
                     continue
 
                 if last_values[sig.name] != event.value:

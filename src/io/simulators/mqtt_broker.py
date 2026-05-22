@@ -126,8 +126,11 @@ async def start_mqtt_broker(
     finally:
         if proc.poll() is None:
             proc.send_signal(signal.SIGTERM)
+            loop = asyncio.get_running_loop()
             try:
-                proc.wait(timeout=1.0)
+                # proc.wait() is a blocking call; run it in an executor to avoid
+                # stalling the event loop during teardown.
+                await loop.run_in_executor(None, proc.wait, 1.0)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.wait()
+                await loop.run_in_executor(None, proc.wait)
