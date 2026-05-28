@@ -13,7 +13,7 @@ import {
   ArrowHelper,
 } from "three";
 import type { Tool, Trajectory, Vec3, Waypoint } from "@/types";
-import { applyJointAngles, buildArmMesh, type ArmMesh } from "@/lib/three/arm-mesh";
+import { applyJointAngles, buildArmMesh, buildToolMesh, type ArmMesh } from "@/lib/three/arm-mesh";
 import { armTCP } from "@/lib/three/fk";
 import { OrbitControls } from "@/lib/three/orbit-controls";
 
@@ -333,6 +333,32 @@ export function Arm3D({
     const s = stateRef.current; if (!s) return;
     s.controls.autoRotate = !!autoRotate;
   }, [autoRotate]);
+
+  // Swap the end-effector when the `tool` prop changes. We rebuild only the
+  // TOOL + TCP groups under j6 (not the whole arm) and re-point state.arm.tcp
+  // so the playback marker / path FK keep tracking the real tool tip.
+  useEffect(() => {
+    const s = stateRef.current; if (!s) return;
+    const j6 = s.arm.joints[5];
+    for (const name of ["TOOL", "TCP"]) {
+      const old = j6.getObjectByName(name);
+      if (!old) continue;
+      old.traverse(o => {
+        const m = o as Mesh;
+        if (m.geometry) m.geometry.dispose();
+        const mat = m.material;
+        if (mat) {
+          if (Array.isArray(mat)) mat.forEach(x => x.dispose());
+          else (mat as MeshBasicMaterial).dispose();
+        }
+      });
+      j6.remove(old);
+    }
+    const built = buildToolMesh(tool ?? null);
+    j6.add(built.group);
+    j6.add(built.tcp);
+    s.arm.tcp = built.tcp;
+  }, [tool]);
 
   void faulty; // reserved for highlighting faulted joints
 

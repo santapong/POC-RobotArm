@@ -145,6 +145,31 @@ def test_mcp_unknown_notification_is_silent(client: TestClient) -> None:
     assert r.status_code == 202
 
 
+def test_mcp_delete_unknown_project_is_error(client: TestClient) -> None:
+    # Match REST 404 semantics: deleting a non-existent project surfaces as a
+    # tool-level isError, not a misleading {deleted:false} success.
+    resp = _rpc(client, "tools/call", {
+        "name": "delete_project",
+        "arguments": {"projectId": "no-such-project"},
+    })
+    assert resp["result"]["isError"] is True
+    text = json.loads(resp["result"]["content"][0]["text"])
+    assert "not found" in text["error"]
+
+
+def test_mutate_skips_save_on_noop(client: TestClient) -> None:
+    # Setting the tool to its current value mustn't bump meta.modified.
+    out = _call_tool(client, "create_project", {"name": "noop", "projectId": "noop"})
+    op_id = out["doc"]["job"]["ops"][0]["id"]
+    current_tool = out["doc"]["job"]["ops"][0]["toolId"]
+    modified_before = ps.get_project_store().load("noop").meta.modified
+
+    # Call set_tool with the same toolId → mutate should detect no change and skip save.
+    _call_tool(client, "set_tool", {"projectId": "noop", "opId": op_id, "toolId": current_tool})
+    modified_after = ps.get_project_store().load("noop").meta.modified
+    assert modified_after == modified_before, "meta.modified must not bump on no-op edit"
+
+
 def test_mcp_call_handles_storage_oserror(client: TestClient, tmp_path, monkeypatch) -> None:
     # Force every save through a write that raises OSError; the tool should
     # come back as a clean isError, not a 500.

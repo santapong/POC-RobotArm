@@ -11,7 +11,11 @@ import { runCommand, type CmdLine } from "./commands";
 export function CommandConsole() {
   const open = useUiStore(s => s.consoleOpen);
   const setOpen = useUiStore(s => s.setConsoleOpen);
-  useDocStore();   // re-render on doc change so `ls` reflects current state
+  // Gate the doc-store subscription on `open`: when closed, the selector
+  // returns a stable `null` (Object.is(null, null) → zustand skips
+  // notification), so closed consoles don't re-render on every doc edit.
+  // When open, return s.doc so `ls` reflects the current state live.
+  useDocStore(s => open ? s.doc : null);
 
   const [lines, setLines] = useState<CmdLine[]>([{ text: "ARC·OPS console — type 'help'", cls: "dim" }]);
   const [input, setInput] = useState("");

@@ -16,7 +16,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import ValidationError
 
@@ -270,7 +270,9 @@ class ProjectStore:
                 meta = json.loads(p.read_text())
             except Exception:  # noqa: BLE001
                 continue
-            project_id = p.stem.replace(".arcjob", "")
+            # Anchor the strip to the file suffix so an awkward
+            # ``foo.arcjob.v2.arcjob.json`` still recovers the full id.
+            project_id = p.name.removesuffix(".arcjob.json")
             out.append({
                 "id": project_id,
                 "name": (meta.get("meta") or {}).get("name") or project_id,
@@ -306,7 +308,13 @@ class ProjectStore:
     # ---- convenience editing -------------------------------------------- #
     def mutate(self, project_id: str, mutator) -> Doc:
         doc = self.load(project_id)
+        before = doc.model_dump(by_alias=True, exclude_none=True)
         mutator(doc)
+        # Skip the write (and the meta.modified bump) when the mutator made
+        # no observable change — keeps "modified" honest for no-op tool calls.
+        after = doc.model_dump(by_alias=True, exclude_none=True)
+        if after == before:
+            return doc
         return self.save(project_id, doc)
 
 
@@ -339,9 +347,4 @@ __all__ = [
     "gen_picks", "make_op", "default_job", "make_default_doc",
     "safe_project_id", "ProjectNotFound", "ProjectInvalid",
     "ProjectStore", "get_project_store", "reset_project_store",
-    "_ensure_iterable",
 ]
-
-
-def _ensure_iterable(x) -> Iterable:  # re-exported for tests
-    return x if isinstance(x, Iterable) else [x]
