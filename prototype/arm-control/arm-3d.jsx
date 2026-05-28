@@ -2,7 +2,7 @@
 // Renders a kinematic chain with orbit controls, grid floor, TCP triad,
 // workspace sphere, joint highlights, and per-joint accent rings.
 
-function buildArmMesh() {
+function buildArmMesh(tool) {
   const root = new THREE.Group();
   root.name = "ARM_ROOT";
 
@@ -124,34 +124,13 @@ function buildArmMesh() {
   flangeRing.position.y = 0.025;
   j6.add(flangeRing);
 
-  // tool / gripper
-  const tool = new THREE.Group();
-  const toolBase = cyl(0.035, 0.035, 0.04, matTool, 16);
-  toolBase.position.y = 0.045;
-  tool.add(toolBase);
-  // 2-finger gripper
-  for (const sgn of [-1, 1]) {
-    const finger = box(0.012, 0.06, 0.025, matTool);
-    finger.position.set(sgn * 0.028, 0.09, 0);
-    tool.add(finger);
-    const pad = box(0.008, 0.015, 0.022, matAccent.clone());
-    pad.position.set(sgn * 0.024, 0.11, 0);
-    tool.add(pad);
-  }
-  tool.position.y = 0.025;
-  j6.add(tool);
-
-  // TCP marker — child of j6, sits at end of tool fingers
-  const tcp = new THREE.Group(); tcp.name = "TCP";
-  tcp.position.y = 0.13;
-  j6.add(tcp);
-
-  // small axis triad on TCP
-  const axisLen = 0.06;
-  const xAxis = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), new THREE.Vector3(0,0,0), axisLen, 0xef4444, 0.02, 0.012);
-  const yAxis = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,0,0), axisLen, 0x4ade80, 0.02, 0.012);
-  const zAxis = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), axisLen, 0x38bdf8, 0.02, 0.012);
-  tcp.add(xAxis, yAxis, zAxis);
+  // tool / gripper — swappable. tool === undefined → use the active tool from
+  // the library (window.ACTIVE_TOOL), null → the default 2-finger gripper.
+  if (tool === undefined) tool = (typeof window !== "undefined" ? window.ACTIVE_TOOL : null) || null;
+  const built = buildToolMesh(tool);
+  j6.add(built.group);
+  j6.add(built.tcp);     // TCP group is a direct child of j6 (j6-local frame)
+  const tcp = built.tcp;
 
   // collect joint refs for external angle control
   const joints = [j1, j2, j3, j4, j5, j6];
@@ -162,6 +141,85 @@ function buildArmMesh() {
   const axes = ["y", "z", "z", "x", "z", "y"];
 
   return { root, joints, axes, tcp, base, accentMats: [baseRing, ...joints.map(j => j.children.find(c => c.material === matAccent.clone()))] };
+}
+
+// Build the end-effector for a tool spec (see TOOL shape in arm-tooling.jsx).
+// Returns { group, tcp }: `group` is the visual tool mounted on the flange,
+// `tcp` is a frame group placed at the tool's TCP in j6-LOCAL coords (carrying
+// the axis triad). tool == null reproduces the original 2-finger gripper, so
+// every existing caller and the armTCP() FK baseline are unchanged.
+function buildToolMesh(tool) {
+  const matTool   = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.25 });
+  const matMetal  = new THREE.MeshStandardMaterial({ color: 0x2a323b, metalness: 0.7, roughness: 0.4 });
+  const matAccent = new THREE.MeshStandardMaterial({ color: 0x4ade80, emissive: 0x4ade80, emissiveIntensity: 0.6, metalness: 0.4, roughness: 0.4 });
+  const matCopper = new THREE.MeshStandardMaterial({ color: 0xc77b3b, metalness: 0.8, roughness: 0.35 });
+  const cyl = (r1, r2, h, mat, segs = 20) => new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, h, segs), mat);
+  const box = (w, h, d, mat) => new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  const add = (grp, mesh, x, y, z) => { mesh.position.set(x, y, z); grp.add(mesh); return mesh; };
+
+  const group = new THREE.Group(); group.name = "TOOL";
+  const type = (tool && tool.type) || "GRIPPER_2F";
+  const size = (tool && tool.size) || {};
+
+  // mount: flange -> tool base (baseline sits the tool on the flange, +y up)
+  const mOff = (tool && tool.mount && tool.mount.offset) || [0, 0, 0];
+  const mRpy = (tool && tool.mount && tool.mount.rpy) || [0, 0, 0];
+  group.position.set(mOff[0], 0.025 + mOff[1], mOff[2]);
+  group.rotation.set(mRpy[0] * Math.PI / 180, mRpy[1] * Math.PI / 180, mRpy[2] * Math.PI / 180);
+
+  let defTcp = [0, 0.13, 0];
+
+  if (type === "GRIPPER_2F" || type === "GRIPPER_3F") {
+    const stroke = size.stroke != null ? size.stroke : 0.056;
+    const fingerLen = size.length != null ? size.length : 0.06;
+    add(group, cyl(0.035, 0.035, 0.04, matTool, 16), 0, 0.045, 0);
+    const n = type === "GRIPPER_3F" ? 3 : 2;
+    for (let k = 0; k < n; k++) {
+      const ang = type === "GRIPPER_3F" ? (k / 3) * Math.PI * 2 : (k === 0 ? Math.PI : 0);
+      const fx = Math.cos(ang) * (stroke / 2), fz = Math.sin(ang) * (stroke / 2);
+      add(group, box(0.012, fingerLen, 0.025, matTool), fx, 0.06 + fingerLen / 2, fz);
+      add(group, box(0.008, 0.015, 0.022, matAccent), fx * 0.85, 0.11, fz * 0.85);
+    }
+    defTcp = [0, 0.13, 0];
+  } else if (type === "SUCTION") {
+    const dia = size.dia != null ? size.dia : 0.05;
+    add(group, cyl(0.018, 0.018, 0.06, matMetal, 16), 0, 0.05, 0);
+    add(group, cyl(dia / 2, dia / 2.6, 0.03, matTool, 20), 0, 0.095, 0);  // cup
+    defTcp = [0, 0.12, 0];
+  } else if (type === "MIG") {
+    const len = size.length != null ? size.length : 0.16;
+    const body = cyl(0.022, 0.022, len * 0.55, matTool, 16);
+    body.position.set(0, 0.03 + len * 0.275, 0);
+    body.rotation.z = -0.35;  // torch angled
+    group.add(body);
+    add(group, cyl(0.02, 0.008, 0.05, matCopper, 16), Math.sin(0.35) * len * 0.5, 0.03 + len * 0.62, 0); // nozzle
+    add(group, cyl(0.0015, 0.0015, 0.03, matAccent, 8), Math.sin(0.35) * len * 0.5, 0.03 + len * 0.75, 0); // wire
+    defTcp = [Math.sin(0.35) * len * 0.5, 0.03 + len * 0.8, 0];
+  } else if (type === "SPINDLE") {
+    const len = size.length != null ? size.length : 0.18;
+    add(group, cyl(0.05, 0.03, len * 0.6, matMetal, 20), 0, 0.03 + len * 0.3, 0);   // body
+    add(group, cyl(0.012, 0.012, len * 0.3, matTool, 16), 0, 0.03 + len * 0.6, 0);  // collet
+    add(group, cyl(0.004, 0.004, len * 0.25, matAccent, 12), 0, 0.03 + len * 0.8, 0); // bit
+    defTcp = [0, 0.03 + len * 0.95, 0];
+  } else if (type === "DISPENSER") {
+    const len = size.length != null ? size.length : 0.14;
+    add(group, cyl(0.02, 0.02, len * 0.6, matTool, 16), 0, 0.03 + len * 0.3, 0);    // barrel
+    add(group, cyl(0.008, 0.001, 0.04, matMetal, 12), 0, 0.03 + len * 0.7, 0);      // needle cone
+    defTcp = [0, 0.03 + len * 0.85, 0];
+  } else {
+    add(group, cyl(0.035, 0.035, 0.05, matTool, 16), 0, 0.05, 0);
+  }
+
+  const off = (tool && tool.tcpOffset) || defTcp;
+  const tcp = new THREE.Group(); tcp.name = "TCP";
+  tcp.position.set(off[0], off[1], off[2]);
+  const aL = 0.06;
+  tcp.add(
+    new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), aL, 0xef4444, 0.02, 0.012),
+    new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), aL, 0x4ade80, 0.02, 0.012),
+    new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), aL, 0x38bdf8, 0.02, 0.012),
+  );
+  return { group, tcp };
 }
 
 // Sign flip so positive joint angles match robotics convention (UR/KUKA):
@@ -190,7 +248,7 @@ function applyJointAngles(arm, anglesRad) {
 let _fkArm = null;
 function armTCP(jointAnglesDeg) {
   if (typeof THREE === "undefined") return (jointAnglesDeg || [0, 0, 0]).slice(0, 3);
-  if (!_fkArm) _fkArm = buildArmMesh();
+  if (!_fkArm) _fkArm = buildArmMesh((typeof window !== "undefined" ? window.ACTIVE_TOOL : null) || null);
   const rad = (jointAnglesDeg || [0, -60, 90, 0, 40, 0]).map(d => d * Math.PI / 180);
   applyJointAngles(_fkArm, rad);
   _fkArm.root.updateMatrixWorld(true);
@@ -199,7 +257,15 @@ function armTCP(jointAnglesDeg) {
   return [v.x, v.y, v.z];
 }
 
-function Arm3D({ jointAngles, faulty = [], showWorkspace = true, showGrid = true, reach = 1.0, width = 600, height = 400, autoRotate = false, pathPoints = null, waypoints = null, markerRef = null, selectedWaypoint = null }) {
+// Set the active end-effector. Stored on window so every buildArmMesh() with no
+// explicit tool (and the FK arm) picks it up; resets the cached FK arm so armTCP
+// recomputes against the new tool's TCP. Viewers remount (React key) to rebuild.
+function setActiveTool(tool) {
+  if (typeof window !== "undefined") window.ACTIVE_TOOL = tool || null;
+  _fkArm = null;
+}
+
+function Arm3D({ jointAngles, faulty = [], showWorkspace = true, showGrid = true, reach = 1.0, width = 600, height = 400, autoRotate = false, pathPoints = null, waypoints = null, markerRef = null, selectedWaypoint = null, tool }) {
   const mountRef = React.useRef(null);
   const stateRef = React.useRef({});
 
@@ -272,8 +338,8 @@ function Arm3D({ jointAngles, faulty = [], showWorkspace = true, showGrid = true
       scene.add(ws);
     }
 
-    // the arm
-    const armBuilt = buildArmMesh();
+    // the arm (tool prop overrides the global active tool when provided)
+    const armBuilt = buildArmMesh(tool);
     scene.add(armBuilt.root);
 
     // pose markers (target ghost) — a translucent flag at the goal pose
@@ -560,4 +626,4 @@ function ArmSideView({ width = 320, height = 280, jointAngles, faulty = [] }) {
   );
 }
 
-Object.assign(window, { buildArmMesh, Arm3D, ArmSideView, armTCP, applyJointAngles, JOINT_SIGN });
+Object.assign(window, { buildArmMesh, buildToolMesh, setActiveTool, Arm3D, ArmSideView, armTCP, applyJointAngles, JOINT_SIGN });

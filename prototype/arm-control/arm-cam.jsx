@@ -6,7 +6,7 @@
 // Returns [j1, j2, j3, j4, j5, j6] degrees so the arm reaches `target`
 // with tool aligned to the surface `normal`. Uses 2-link planar IK for J2/J3
 // and points the wrist along the normal.
-function approxIK(target, normal = [0, 1, 0]) {
+function approxIK(target, normal = [0, 1, 0], tcpLen = null) {
   const [x, y, z] = target;
   const upperArm = 0.42;
   const forearm  = 0.34;
@@ -17,8 +17,13 @@ function approxIK(target, normal = [0, 1, 0]) {
   const r  = Math.sqrt(x * x + z * z);
   const h  = y - baseY;
 
-  // reduce target distance slightly to leave room for wrist + tool
-  const wristOffset = 0.20;
+  // solve for the FLANGE, not the TCP: back off by the wrist length + the
+  // active tool's TCP length so longer tools reach less far (approximate).
+  if (tcpLen == null) {
+    const t = (typeof window !== "undefined" && window.ACTIVE_TOOL) ? window.ACTIVE_TOOL.tcpOffset : null;
+    tcpLen = t ? Math.hypot(t[0], t[1], t[2]) : 0.13;
+  }
+  const wristOffset = 0.10 + tcpLen;
   const rTarg = Math.max(0.1, r - wristOffset * Math.abs(normal[0] || 0));
   const hTarg = h + wristOffset * Math.abs(normal[1] || 1);
 
@@ -59,7 +64,9 @@ function generateCAMTrajectory(picks, opts = {}) {
     vel = 30, acc = 40,
     home = [0, 0.9, 0],
     moveType = "MoveL",
+    tool = null,
   } = opts;
+  const tcpLen = tool && tool.tcpOffset ? Math.hypot(tool.tcpOffset[0], tool.tcpOffset[1], tool.tcpOffset[2]) : null;
 
   const wps = [];
   let t = 0;
@@ -86,7 +93,7 @@ function generateCAMTrajectory(picks, opts = {}) {
     type: "MoveJ",
     tcp: firstAprPos,
     rot: rotFromNormal(first.normal),
-    joints: approxIK(firstAprPos, first.normal),
+    joints: approxIK(firstAprPos, first.normal, tcpLen),
     vel: 70, acc: 60, blend: 10, dwell: 0, io: null, t,
   });
   t += 0.7;
@@ -106,7 +113,7 @@ function generateCAMTrajectory(picks, opts = {}) {
       type: isFirst ? "MoveL" : moveType,
       tcp,
       rot: rotFromNormal(p.normal),
-      joints: approxIK(tcp, p.normal),
+      joints: approxIK(tcp, p.normal, tcpLen),
       vel, acc,
       blend: i === picks.length - 1 ? 0 : 5,
       dwell: isFirst ? 0.1 : 0,
@@ -128,7 +135,7 @@ function generateCAMTrajectory(picks, opts = {}) {
     type: "MoveL",
     tcp: retreatPos,
     rot: rotFromNormal(last.normal),
-    joints: approxIK(retreatPos, last.normal),
+    joints: approxIK(retreatPos, last.normal, tcpLen),
     vel: 50, acc: 50, blend: 10, dwell: 0,
     io: { type: "DO", ch: 0, value: false, label: "TOOL OFF" },
     t: t + 0.5,
@@ -183,7 +190,7 @@ function rotFromNormal(n) {
 function CAMViewer3D({
   jointAngles,
   picks, generatedTrajectory, hoverPick,
-  workpieceShape, onSurfaceClick, onSurfaceHover,
+  part, tool, onSurfaceClick, onSurfaceHover,
   reach = 1.0,
 }) {
   const mountRef = React.useRef();
@@ -223,51 +230,12 @@ function CAMViewer3D({
     );
     floor.rotation.x = -Math.PI/2; floor.position.y = -0.001; scene.add(floor);
 
-    // arm
-    const armBuilt = buildArmMesh();
+    // arm (built with the selected tool)
+    const armBuilt = buildArmMesh(tool);
     scene.add(armBuilt.root);
 
-    // ── workpiece (clickable) ─────────────────────────────────────
-    function buildWorkpiece(shape) {
-      const grp = new THREE.Group();
-      grp.name = "WORKPIECE";
-      const matBody = new THREE.MeshStandardMaterial({ color: 0x9ca8b4, metalness: 0.6, roughness: 0.4 });
-      const matEdge = new THREE.LineBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.85 });
-
-      if (shape === "CYLINDER") {
-        const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.18, 36), matBody);
-        cyl.position.set(0.50, 0.09, 0);
-        cyl.userData.clickable = true;
-        grp.add(cyl);
-        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(cyl.geometry), matEdge);
-        edges.position.copy(cyl.position); grp.add(edges);
-      } else if (shape === "STEP") {
-        const base = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.06, 0.30), matBody);
-        base.position.set(0.50, 0.03, 0);
-        base.userData.clickable = true;
-        const top = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.08, 0.22), matBody);
-        top.position.set(0.50, 0.10, 0);
-        top.userData.clickable = true;
-        grp.add(base, top);
-        [base, top].forEach(m => {
-          const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), matEdge);
-          e.position.copy(m.position); grp.add(e);
-        });
-      } else {
-        // BOX (default)
-        const box = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.15, 0.30), matBody);
-        box.position.set(0.50, 0.075, 0);
-        box.userData.clickable = true;
-        grp.add(box);
-        const e = new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry), matEdge);
-        e.position.copy(box.position); grp.add(e);
-      }
-
-      // pedestal label (axes marker beside workpiece)
-      return grp;
-    }
-
-    let workpiece = buildWorkpiece(workpieceShape || "BOX");
+    // ── workpiece (parametric, clickable) ─────────────────────────
+    let workpiece = buildPartMesh(part);
     scene.add(workpiece);
 
     // ── hover marker ──────────────────────────────────────────────
@@ -360,7 +328,7 @@ function CAMViewer3D({
       scene, camera, renderer, arm: armBuilt,
       workpiece, hoverGrp, hoverDot, hoverRing, hoverNormal,
       pickGroup, pathGroup, rebuildPicks, rebuildPath,
-      buildWorkpiece, currentShape: workpieceShape || "BOX",
+      currentPart: part,
       target: (jointAngles || [0,-60,90,0,40,0]).map(d => d * Math.PI/180),
       current: (jointAngles || [0,-60,90,0,40,0]).map(d => d * Math.PI/180),
       alive: true, raf: null,
@@ -475,19 +443,19 @@ function CAMViewer3D({
     };
   }, []);
 
-  // swap workpiece shape on change
+  // rebuild the parametric part when it changes (kind/dims/pose edits)
   React.useEffect(() => {
     const s = stateRef.current;
-    if (!s.scene || !workpieceShape || workpieceShape === s.currentShape) return;
+    if (!s.scene || !part || part === s.currentPart) return;
     s.scene.remove(s.workpiece);
     s.workpiece.traverse(o => {
       if (o.geometry) o.geometry.dispose();
       if (o.material) { if (Array.isArray(o.material)) o.material.forEach(m => m.dispose()); else o.material.dispose(); }
     });
-    s.workpiece = s.buildWorkpiece(workpieceShape);
+    s.workpiece = buildPartMesh(part);
     s.scene.add(s.workpiece);
-    s.currentShape = workpieceShape;
-  }, [workpieceShape]);
+    s.currentPart = part;
+  }, [part]);
 
   React.useEffect(() => {
     const s = stateRef.current;
@@ -510,7 +478,8 @@ function CAMViewer3D({
 
 // ── Main CAM screen ──────────────────────────────────────────────────────
 function CAMScreen({ robot, onGoto }) {
-  const [shape, setShape] = React.useState("BOX");
+  const [toolId, setToolId] = React.useState("grip-2f");
+  const [part, setPart] = React.useState(() => JSON.parse(JSON.stringify(PART_LIBRARY[0])));
   const [mode, setMode] = React.useState("POLY");   // POLY | POINT | CONTOUR
   const [standoff, setStandoff] = React.useState(5);       // mm
   const [approach, setApproach] = React.useState(60);      // mm
@@ -521,57 +490,67 @@ function CAMScreen({ robot, onGoto }) {
   const [picks, setPicks] = React.useState([]);
   const [hover, setHover] = React.useState(null);
 
-  const handleClick = (hit) => {
-    setPicks(p => [...p, hit]);
-  };
+  const tool = findTool(toolId);
+  // make the chosen tool active so the 3D arm, FK and IK all use it
+  React.useEffect(() => { setActiveTool(findTool(toolId)); }, [toolId]);
+
+  const handleClick = (hit) => { setPicks(p => [...p, hit]); };
   const handleHover = (hit) => setHover(hit);
 
   const clearAll = () => { setPicks([]); setHover(null); };
   const undo = () => setPicks(p => p.slice(0, -1));
   const reverse = () => setPicks(p => [...p].reverse());
 
-  // generate a contour pattern (rectangle) on the top face automatically
+  // load default dims/pose when the part kind changes
+  const setKind = (kind) => {
+    const def = PART_LIBRARY.find(p => p.kind === kind) || PART_LIBRARY[0];
+    setPart(JSON.parse(JSON.stringify({ ...def })));
+    setPicks([]);
+  };
+  const setDim = (k, v) => setPart(p => ({ ...p, dims: { ...p.dims, [k]: v } }));
+  const setPosX = (v) => setPart(p => ({ ...p, pose: { ...p.pose, pos: [v, p.pose.pos[1], p.pose.pos[2]] } }));
+  const setPosZ = (v) => setPart(p => ({ ...p, pose: { ...p.pose, pos: [p.pose.pos[0], p.pose.pos[1], v] } }));
+
+  // top-face footprint of the current part (for CONTOUR/RASTER patterns)
+  const footprint = () => {
+    const d = part.dims, c = part.pose.pos, y = partTopY(part);
+    let wx, wz;
+    if (part.kind === "CYLINDER") { wx = wz = d.r; }
+    else if (part.kind === "STEP") { wx = d.topW / 2; wz = d.topD / 2; }
+    else { wx = d.w / 2; wz = d.d / 2; }
+    const inset = 0.04;
+    return { x0: c[0] - wx + inset, x1: c[0] + wx - inset, z0: c[2] - wz + inset, z1: c[2] + wz - inset, y };
+  };
+
   const generateContour = () => {
-    const z0 = -0.10, z1 = 0.10, x0 = 0.40, x1 = 0.60;
-    const y  = shape === "STEP" ? 0.14 : (shape === "CYLINDER" ? 0.18 : 0.15);
+    const { x0, x1, z0, z1, y } = footprint();
     const n = [0, 1, 0];
     setPicks([
-      { point: [x0, y, z0], normal: n },
-      { point: [x1, y, z0], normal: n },
-      { point: [x1, y, z1], normal: n },
-      { point: [x0, y, z1], normal: n },
+      { point: [x0, y, z0], normal: n }, { point: [x1, y, z0], normal: n },
+      { point: [x1, y, z1], normal: n }, { point: [x0, y, z1], normal: n },
       { point: [x0, y, z0], normal: n },
     ]);
   };
-  // generate a raster scan
   const generateRaster = () => {
-    const pts = [];
-    const z0 = -0.10, z1 = 0.10, x0 = 0.40, x1 = 0.60;
-    const y  = shape === "STEP" ? 0.14 : (shape === "CYLINDER" ? 0.18 : 0.15);
-    const n  = [0, 1, 0];
-    const passes = 5;
+    const { x0, x1, z0, z1, y } = footprint();
+    const n = [0, 1, 0], pts = [], passes = 5;
     for (let i = 0; i < passes; i++) {
       const z = z0 + (z1 - z0) * (i / (passes - 1));
-      if (i % 2 === 0) {
-        pts.push({ point: [x0, y, z], normal: n });
-        pts.push({ point: [x1, y, z], normal: n });
-      } else {
-        pts.push({ point: [x1, y, z], normal: n });
-        pts.push({ point: [x0, y, z], normal: n });
-      }
+      if (i % 2 === 0) { pts.push({ point: [x0, y, z], normal: n }); pts.push({ point: [x1, y, z], normal: n }); }
+      else { pts.push({ point: [x1, y, z], normal: n }); pts.push({ point: [x0, y, z], normal: n }); }
     }
     setPicks(pts);
   };
 
-  // auto-generated trajectory
+  // auto-generated trajectory (toolId in deps: IK backs off by the tool length)
   const traj = React.useMemo(() => {
     if (picks.length === 0) return null;
     return generateCAMTrajectory(picks, {
       standoff:  standoff / 1000,
       approachHeight: approach / 1000,
-      vel, acc,
+      vel, acc, tool,
     });
-  }, [picks, standoff, approach, vel, acc]);
+  }, [picks, standoff, approach, vel, acc, toolId]);
 
   // joint angles: at last picked point if any, else home
   const liveJoints = React.useMemo(() => {
@@ -581,26 +560,28 @@ function CAMScreen({ robot, onGoto }) {
       return approxIK(last.point, last.normal);
     }
     return [0, -90, 0, 0, 90, 0];
-  }, [hover, picks]);
+  }, [hover, picks, toolId]);
 
   return (
     <div className="screen cam">
       <div className="cam-grid">
         <Panel title="CAM · CLICK SURFACE TO DEFINE PATH" right={
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span className="tag dim">WORKPIECE</span>
-            {["BOX","CYLINDER","STEP"].map(s =>
-              <button key={s} className={"chip" + (shape === s ? " on" : "")} onClick={() => { setShape(s); setPicks([]); }}>{s}</button>
+            <span className="tag dim">PART</span>
+            {["BOX","CYLINDER","PLATE","STEP"].map(k =>
+              <button key={k} className={"chip" + (part.kind === k ? " on" : "")} onClick={() => setKind(k)}>{k}</button>
             )}
           </div>
         } pad={false} style={{ gridColumn: "1 / span 2", gridRow: "1 / span 2" }}>
           <div className="cam-3d">
             <CAMViewer3D
+              key={toolId}
               jointAngles={liveJoints}
               picks={picks}
               generatedTrajectory={traj}
               hoverPick={hover}
-              workpieceShape={shape}
+              part={part}
+              tool={tool}
               onSurfaceClick={handleClick}
               onSurfaceHover={handleHover}
               reach={robot ? robot.reach : 1.0}
@@ -636,6 +617,49 @@ function CAMScreen({ robot, onGoto }) {
 
         {/* PARAMETERS */}
         <Panel title="MACHINING PARAMETERS">
+          <div className="tag dim">TOOL</div>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4, marginBottom: 6 }}>
+            {TOOL_LIBRARY.map(t =>
+              <button key={t.id} className={"chip" + (toolId === t.id ? " on" : "")} onClick={() => setToolId(t.id)}>{t.name}</button>
+            )}
+          </div>
+          <div className="form-row" style={{ flexDirection: "row", gap: 10, marginBottom: 8 }}>
+            <span className="tag dim">TYPE</span>
+            <span className="mono" style={{ fontSize: 10, color: "var(--info)" }}>{tool ? tool.type : "—"}</span>
+            <span className="tag dim">TCP·LEN</span>
+            <span className="mono" style={{ fontSize: 10, color: "var(--ok)" }}>
+              {tool ? (Math.hypot(...tool.tcpOffset) * 1000).toFixed(0) : 0} mm
+            </span>
+          </div>
+
+          <hr className="hr" />
+          <div className="tag dim">PART DIMENSIONS · {part.kind}</div>
+          <div style={{ marginTop: 4, marginBottom: 4 }}>
+            {Object.keys(part.dims).map(k => (
+              <div key={k} className="cam-slider">
+                <div className="cam-slider-h">
+                  <span className="tag dim">{k.toUpperCase()}</span>
+                  <span className="mono" style={{ color: "var(--ok)" }}>{(part.dims[k] * 1000).toFixed(0)} mm</span>
+                </div>
+                <input type="range" className="slider" min="0.02" max="0.6" step="0.005"
+                  value={part.dims[k]} onChange={e => setDim(k, +e.target.value)} />
+              </div>
+            ))}
+            <div className="cam-slider">
+              <div className="cam-slider-h"><span className="tag dim">POS·X</span>
+                <span className="mono" style={{ color: "var(--ok)" }}>{part.pose.pos[0].toFixed(2)} m</span></div>
+              <input type="range" className="slider" min="0.2" max="0.8" step="0.01"
+                value={part.pose.pos[0]} onChange={e => setPosX(+e.target.value)} />
+            </div>
+            <div className="cam-slider">
+              <div className="cam-slider-h"><span className="tag dim">POS·Z</span>
+                <span className="mono" style={{ color: "var(--ok)" }}>{part.pose.pos[2].toFixed(2)} m</span></div>
+              <input type="range" className="slider" min="-0.4" max="0.4" step="0.01"
+                value={part.pose.pos[2]} onChange={e => setPosZ(+e.target.value)} />
+            </div>
+          </div>
+
+          <hr className="hr" />
           <div className="tag dim">PICK MODE</div>
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
             {[["POINT","Single picks"],["POLY","Polyline"],["CONTOUR","Closed loop"]].map(([k, lbl]) =>
