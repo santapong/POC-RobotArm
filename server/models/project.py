@@ -159,6 +159,29 @@ class Job(_Camel):
     ops: List[Operation] = Field(default_factory=list)
 
 
+class RobotLinks(_Camel):
+    base_height: float = 0.26
+    upper_arm: float = 0.42
+    forearm: float = 0.34
+    wrist_offset: float = 0.155
+    flange_offset: float = 0.025
+
+
+class RobotModel(_Camel):
+    id: str
+    name: str
+    manufacturer: str
+    family: str
+    dof: int = 6
+    payload: float
+    reach: float
+    links: RobotLinks = Field(default_factory=RobotLinks)
+    joint_limits: List[Tuple[float, float]] = Field(default_factory=list)
+    max_joint_vel: List[float] = Field(default_factory=list)
+    max_tcp_speed: float = 1.0
+    accent: str = "#4ade80"
+
+
 class DocMeta(_Camel):
     name: str
     author: str = "OP"
@@ -166,10 +189,13 @@ class DocMeta(_Camel):
 
 
 class Doc(_Camel):
-    version: int = 1
+    version: int = 2
     meta: DocMeta
     job: Job
     active_tcp_id: str = "tcp-tip"
+    # Optional RobotModel id this project was authored for. Missing on a v1
+    # doc → resolves to the default (ur5e) at read time.
+    robot_id: Optional[str] = None
 
 
 class Trajectory(_Camel):

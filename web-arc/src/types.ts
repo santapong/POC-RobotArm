@@ -188,6 +188,38 @@ export interface Doc {
   meta: { name: string; author: string; modified: string };
   job: Job;
   activeTcpId: string;
+  // Optional: which RobotModel the project was authored for. Missing means
+  // "use DEFAULT_ROBOT_ID" — a v1 doc loaded under v2 leaves this unset and
+  // the UI / FK fall back to the default. See lib/robots.ts.
+  robotId?: string;
+}
+
+// Catalog entry for a 6-DoF arm (UR, ABB, KUKA, Fanuc, …). The mesh and IK
+// are schematic — link lengths drive size/reach scaling but don't model each
+// manufacturer's brand-specific kinematics. The numeric specs (payload,
+// reach, joint limits, max speeds) are sourced from public datasheets and
+// drive FK reach, the workspace sphere, and the spec readouts.
+export interface RobotLinks {
+  baseHeight: number;   // floor → J2 (m)
+  upperArm: number;     // J2 → J3 (m)
+  forearm: number;      // J3 → J4 (m)
+  wristOffset: number;  // J4 → J5 → J6 chain (m)
+  flangeOffset: number; // J6 → flange face (m, without tool)
+}
+
+export interface RobotModel {
+  id: string;
+  name: string;
+  manufacturer: string;
+  family: string;
+  dof: 6;
+  payload: number;             // kg
+  reach: number;               // m
+  links: RobotLinks;
+  jointLimits: [number, number][];   // 6 (lo, hi) pairs, degrees
+  maxJointVel: number[];              // °/s per joint
+  maxTcpSpeed: number;                // m/s
+  accent: string;                     // brand accent (rgb hex)
 }
 
 export interface CamOptions {

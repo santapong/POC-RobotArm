@@ -1,15 +1,20 @@
 import { useState } from "react";
 import { useUiStore, type Tweaks } from "@/store/useUiStore";
+import { useDocStore } from "@/store/useDocStore";
+import { resolveRobot } from "@/lib/robots";
 
 const ACCENTS = ["#4ade80", "#38bdf8", "#fbbf24", "#e879f9", "#f97316"];
 
 // Floating display tweaks (accent color, density, 3D toggles, fleet size).
-// A simplified replacement for the prototype's design-harness TweaksPanel —
-// just a chip-toggled side panel that mutates useUiStore.tweaks.
+// Also shows a read-only badge for the project's active robot — clickable to
+// jump to PROGRAM where the picker lives.
 export function TweaksPanel() {
   const [open, setOpen] = useState(false);
   const tweaks = useUiStore(s => s.tweaks);
   const setTweak = useUiStore(s => s.setTweak);
+  const setScreen = useUiStore(s => s.setScreen);
+  const robotId = useDocStore(s => s.doc.robotId);
+  const robot = resolveRobot(robotId);
   const set = <K extends keyof Tweaks>(k: K) => (v: Tweaks[K]) => setTweak(k, v);
 
   return (
@@ -21,6 +26,14 @@ export function TweaksPanel() {
         title="Display tweaks"
       >
         ⚙ TWEAKS
+      </button>
+      <button
+        className="chip"
+        style={{ position: "fixed", top: 60, right: 92, zIndex: 1100 }}
+        onClick={() => setScreen("program")}
+        title={`Active robot — click to open PROGRAM picker (${robot.manufacturer} · ${robot.payload}kg · ${(robot.reach * 1000).toFixed(0)}mm)`}
+      >
+        ◉ {robot.name}
       </button>
       {open && (
         <aside

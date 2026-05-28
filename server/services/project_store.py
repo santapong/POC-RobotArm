@@ -16,7 +16,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
@@ -29,6 +29,8 @@ from server.models.project import (
     Part,
     PartPose,
     Pick,
+    RobotLinks,
+    RobotModel,
     TcpFrame,
     Tool,
     ToolLead,
@@ -81,6 +83,102 @@ OP_DEFAULT_TOOL: Dict[OpKind, str] = {"PICKPLACE": "grip-2f", "WELD": "mig", "MI
 OP_DEFAULT_PART: Dict[OpKind, str] = {"PICKPLACE": "part-box", "WELD": "part-plate", "MILL": "part-box", "DISPENSE": "part-plate"}
 
 WEAVE_DEFAULT = Weave()
+
+
+# --------------------------------------------------------------------------- #
+# Robot model catalog — mirror of web-arc/src/lib/robots.ts. Numeric specs
+# (payload, reach, joint limits, max speeds) come from public manufacturer
+# datasheets; link lengths are schematic, tuned so the rendered arm matches
+# the workspace sphere drawn in the 3D viewer.
+# --------------------------------------------------------------------------- #
+
+def _links_for(reach: float) -> RobotLinks:
+    return RobotLinks(
+        base_height=round(reach * 0.22, 3),
+        upper_arm=round(reach * 0.36, 3),
+        forearm=round(reach * 0.30, 3),
+        wrist_offset=round(reach * 0.105, 3),
+        flange_offset=round(reach * 0.015, 3),
+    )
+
+
+def _six(lo: float, hi: float) -> List[Tuple[float, float]]:
+    return [(lo, hi) for _ in range(6)]
+
+
+# Defined as a function so importers always get a fresh list (the mutable
+# RobotModel objects shouldn't be shared by reference with the MCP layer).
+def _build_robot_library() -> List[RobotModel]:
+    return [
+        RobotModel(
+            id="ur5e", name="UR5e", manufacturer="Universal Robots", family="e-Series",
+            payload=5, reach=0.85,
+            links=RobotLinks(base_height=0.26, upper_arm=0.425, forearm=0.392, wrist_offset=0.155, flange_offset=0.025),
+            joint_limits=_six(-360, 360),
+            max_joint_vel=[180, 180, 180, 180, 180, 180],
+            max_tcp_speed=1.0, accent="#4ade80",
+        ),
+        RobotModel(
+            id="ur10e", name="UR10e", manufacturer="Universal Robots", family="e-Series",
+            payload=12.5, reach=1.30,
+            links=RobotLinks(base_height=0.36, upper_arm=0.612, forearm=0.572, wrist_offset=0.180, flange_offset=0.025),
+            joint_limits=_six(-360, 360),
+            max_joint_vel=[120, 120, 180, 180, 180, 180],
+            max_tcp_speed=1.0, accent="#38bdf8",
+        ),
+        RobotModel(
+            id="abb-irb1300-7-140", name="IRB 1300-7/1.40", manufacturer="ABB", family="IRB 1300",
+            payload=7, reach=1.40, links=_links_for(1.40),
+            joint_limits=[(-180, 180), (-75, 155), (-180, 75), (-230, 230), (-125, 125), (-400, 400)],
+            max_joint_vel=[225, 225, 225, 360, 360, 540],
+            max_tcp_speed=6.0, accent="#ef4444",
+        ),
+        RobotModel(
+            id="abb-irb1300-10-115", name="IRB 1300-10/1.15", manufacturer="ABB", family="IRB 1300",
+            payload=10, reach=1.15, links=_links_for(1.15),
+            joint_limits=[(-180, 180), (-75, 155), (-180, 75), (-230, 230), (-125, 125), (-400, 400)],
+            max_joint_vel=[225, 225, 225, 360, 360, 540],
+            max_tcp_speed=6.0, accent="#ef4444",
+        ),
+        RobotModel(
+            id="abb-irb1300-11-090", name="IRB 1300-11/0.9", manufacturer="ABB", family="IRB 1300",
+            payload=11, reach=0.90, links=_links_for(0.90),
+            joint_limits=[(-180, 180), (-75, 155), (-180, 75), (-230, 230), (-125, 125), (-400, 400)],
+            max_joint_vel=[225, 225, 225, 360, 360, 540],
+            max_tcp_speed=6.0, accent="#ef4444",
+        ),
+        RobotModel(
+            id="abb-irb120", name="IRB 120", manufacturer="ABB", family="IRB 120",
+            payload=3, reach=0.58, links=_links_for(0.58),
+            joint_limits=[(-165, 165), (-110, 110), (-110, 70), (-160, 160), (-120, 120), (-400, 400)],
+            max_joint_vel=[250, 250, 250, 320, 320, 420],
+            max_tcp_speed=6.2, accent="#f97316",
+        ),
+        RobotModel(
+            id="kuka-kr6-r900", name="KR 6 R900 sixx", manufacturer="KUKA", family="AGILUS",
+            payload=6, reach=0.901, links=_links_for(0.901),
+            joint_limits=[(-170, 170), (-190, 45), (-120, 156), (-185, 185), (-120, 120), (-350, 350)],
+            max_joint_vel=[300, 300, 300, 360, 360, 600],
+            max_tcp_speed=7.5, accent="#fbbf24",
+        ),
+        RobotModel(
+            id="fanuc-lrmate-200id-7l", name="LR Mate 200iD/7L", manufacturer="Fanuc", family="LR Mate 200iD",
+            payload=7, reach=0.911, links=_links_for(0.911),
+            joint_limits=[(-170, 170), (-100, 145), (-145, 213), (-190, 190), (-125, 125), (-360, 360)],
+            max_joint_vel=[380, 360, 460, 540, 720, 900],
+            max_tcp_speed=6.0, accent="#e879f9",
+        ),
+    ]
+
+
+ROBOT_LIBRARY: List[RobotModel] = _build_robot_library()
+DEFAULT_ROBOT_ID = "ur5e"
+
+
+def find_robot(robot_id: Optional[str]) -> Optional[RobotModel]:
+    if not robot_id:
+        return None
+    return next((r for r in ROBOT_LIBRARY if r.id == robot_id), None)
 
 
 def find_tool(tool_id: str) -> Optional[Tool]:
@@ -218,7 +316,6 @@ def make_default_doc(name: str = "Untitled Program") -> Doc:
     job = default_job()
     job.name = name
     return Doc(
-        version=1,
         meta=DocMeta(name=name, author="OP·KOSTA", modified=_now_iso()),
         job=job,
         active_tcp_id="tcp-tip",
@@ -342,8 +439,9 @@ def reset_project_store(root: Optional[Path] = None) -> ProjectStore:
 
 __all__ = [
     "TCP_LIBRARY", "TOOL_LIBRARY", "PART_LIBRARY", "WEAVE_DEFAULT",
+    "ROBOT_LIBRARY", "DEFAULT_ROBOT_ID",
     "OP_DEFAULT_TOOL", "OP_DEFAULT_PART",
-    "find_tool", "find_part", "find_tcp",
+    "find_tool", "find_part", "find_tcp", "find_robot",
     "gen_picks", "make_op", "default_job", "make_default_doc",
     "safe_project_id", "ProjectNotFound", "ProjectInvalid",
     "ProjectStore", "get_project_store", "reset_project_store",

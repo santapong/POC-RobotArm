@@ -24,14 +24,17 @@ from pydantic import ValidationError
 
 from server.models.project import Doc
 from server.services.project_store import (
+    DEFAULT_ROBOT_ID,
     OP_DEFAULT_PART,
     OP_DEFAULT_TOOL,
     PART_LIBRARY,
     ProjectInvalid,
     ProjectNotFound,
+    ROBOT_LIBRARY,
     TCP_LIBRARY,
     TOOL_LIBRARY,
     find_part,
+    find_robot,
     find_tool,
     gen_picks,
     get_project_store,
@@ -130,8 +133,27 @@ def _tool_list_catalogs(_: Dict[str, Any]) -> Any:
         "tools": [t.model_dump(by_alias=True, exclude_none=True) for t in TOOL_LIBRARY],
         "parts": [p.model_dump(by_alias=True, exclude_none=True) for p in PART_LIBRARY],
         "tcps":  [t.model_dump(by_alias=True, exclude_none=True) for t in TCP_LIBRARY],
+        "robots": [r.model_dump(by_alias=True, exclude_none=True) for r in ROBOT_LIBRARY],
+        "defaultRobotId": DEFAULT_ROBOT_ID,
         "opKinds": list(OP_DEFAULT_TOOL.keys()),
     }
+
+
+def _tool_list_robots(_: Dict[str, Any]) -> Any:
+    return {
+        "robots": [r.model_dump(by_alias=True, exclude_none=True) for r in ROBOT_LIBRARY],
+        "defaultRobotId": DEFAULT_ROBOT_ID,
+    }
+
+
+def _tool_set_robot(args: Dict[str, Any]) -> Any:
+    [pid, robot_id] = _require(args, "projectId", "robotId")
+    if not find_robot(robot_id):
+        known = ", ".join(r.id for r in ROBOT_LIBRARY)
+        raise ValueError(f"unknown robotId '{robot_id}' — known: {known}")
+    def m(doc: Doc) -> None:
+        doc.robot_id = robot_id
+    return _mutate(pid, m)
 
 
 # ---- operation editing --------------------------------------------------- #
@@ -269,9 +291,16 @@ TOOLS: List[Tool] = [
          {"type": "object", "properties": {"projectId": _project_id_s(), "name": {"type": "string"}}},
          _tool_create_project),
 
-    Tool("list_catalogs", "List the tool / part / TCP catalogs and op kinds the editor knows about.",
+    Tool("list_catalogs", "List the tool / part / TCP / robot catalogs and op kinds the editor knows about.",
          {"type": "object", "properties": {}, "additionalProperties": False},
          _tool_list_catalogs),
+    Tool("list_robots", "List every RobotModel the editor supports (payload, reach, joint limits, max speeds).",
+         {"type": "object", "properties": {}, "additionalProperties": False},
+         _tool_list_robots),
+    Tool("set_robot", "Set the RobotModel a project is authored for. robotId must be a known catalog id (see list_robots).",
+         {"type": "object", "required": ["projectId", "robotId"],
+          "properties": {"projectId": _project_id_s(), "robotId": {"type": "string"}}},
+         _tool_set_robot),
 
     Tool("create_op", "Append a new operation to a project. kind ∈ PICKPLACE|WELD|MILL|DISPENSE.",
          {"type": "object", "required": ["projectId", "kind"],

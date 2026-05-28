@@ -11,6 +11,8 @@ import { setActiveTool } from "@/lib/three/fk";
 import { Panel, Stat } from "@/components/common";
 import { CAMViewer3D, type SurfaceHit } from "@/components/three/CAMViewer3D";
 import { useUiStore } from "@/store/useUiStore";
+import { useDocStore } from "@/store/useDocStore";
+import { resolveRobot } from "@/lib/robots";
 
 export interface CAMScreenProps { robot: Robot | undefined; }
 
@@ -18,6 +20,8 @@ const cloneJSON = <T,>(o: T): T => JSON.parse(JSON.stringify(o));
 
 export function CAMScreen({ robot }: CAMScreenProps) {
   const openInPath = useUiStore(s => s.openInPath);
+  const robotId = useDocStore(s => s.doc.robotId);
+  const activeRobot = resolveRobot(robotId);
 
   const [toolId, setToolId] = useState("grip-2f");
   const [part, setPart] = useState<Part>(() => cloneJSON(PART_LIBRARY[0]));
@@ -112,11 +116,11 @@ export function CAMScreen({ robot }: CAMScreenProps) {
           }>
           <div className="cam-3d">
             <CAMViewer3D
-              key={toolId}
+              key={activeRobot.id + ":" + toolId}
               jointAngles={liveJoints}
               picks={picks}
               generatedTrajectory={traj}
-              part={part} tool={tool}
+              part={part} tool={tool} robot={activeRobot}
               onSurfaceClick={(hit) => setPicks(p => [...p, hit])}
               onSurfaceHover={setHover}
             />

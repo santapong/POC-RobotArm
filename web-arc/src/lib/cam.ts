@@ -6,13 +6,22 @@
 
 import type { CamOptions, Pick, Trajectory, Vec3, Waypoint } from "@/types";
 import { applyWeave } from "./three/weave";
-import { getActiveTool } from "./three/fk";
+import { getActiveRobot, getActiveTool } from "./three/fk";
+import type { RobotModel } from "@/types";
 
-export function approxIK(target: Vec3, normal: Vec3 = [0, 1, 0], tcpLen: number | null = null): number[] {
+export function approxIK(
+  target: Vec3,
+  normal: Vec3 = [0, 1, 0],
+  tcpLen: number | null = null,
+  robot: RobotModel | null = null,
+): number[] {
   const [x, y, z] = target;
-  const upperArm = 0.42;
-  const forearm  = 0.34;
-  const baseY    = 0.26;
+  // Link lengths come from the active robot when available, so the IK backs
+  // off by the right wrist offset for ABB / KUKA / Fanuc / UR class arms.
+  const rb = robot ?? getActiveRobot();
+  const upperArm = rb?.links.upperArm ?? 0.42;
+  const forearm  = rb?.links.forearm  ?? 0.34;
+  const baseY    = rb?.links.baseHeight ?? 0.26;
 
   const j1 = Math.atan2(-z, x);
   const r  = Math.sqrt(x * x + z * z);

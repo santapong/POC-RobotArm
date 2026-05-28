@@ -8,7 +8,18 @@ import {
   ArrowHelper, BoxGeometry, CylinderGeometry, Group, Mesh,
   MeshStandardMaterial, TorusGeometry, Vector3,
 } from "three";
-import type { Tool } from "@/types";
+import type { RobotModel, Tool } from "@/types";
+
+// Fallback link lengths when no robot is selected. Match the original
+// hardcoded prototype geometry (UR5e-ish) so callers that don't pass a
+// robot render the same arm they always did.
+const DEFAULT_LINKS = {
+  baseHeight: 0.26,
+  upperArm: 0.42,
+  forearm: 0.34,
+  wristOffset: 0.155,
+  flangeOffset: 0.025,
+};
 
 export type Axis = "x" | "y" | "z";
 
@@ -39,8 +50,23 @@ export function applyJointAngles(arm: ArmMesh, anglesRad: number[]): void {
   }
 }
 
-export function buildArmMesh(tool: Tool | null): ArmMesh {
+export function buildArmMesh(tool: Tool | null, robot: RobotModel | null = null): ArmMesh {
   const root = new Group(); root.name = "ARM_ROOT";
+
+  // Schematic link lengths come from the active RobotModel (when provided);
+  // otherwise fall back to UR5e-ish defaults so legacy callers are unchanged.
+  const L = robot ? robot.links : DEFAULT_LINKS;
+  const armLen1 = L.upperArm;
+  const armLen2 = L.forearm;
+  const wristChain = L.wristOffset;
+  const flangeLen = L.flangeOffset;
+  const j5xOffset = wristChain * (0.10 / 0.155);   // j4 → j5 along x
+  const j6zOffset = wristChain * (0.055 / 0.155);  // j5 → j6 along z
+  // Column height that puts world(j2.y) at L.baseHeight, given a 0.04 plate
+  // and a 0.04 shoulder offset above j1.
+  const colHeight = Math.max(0.04, L.baseHeight - 0.08);
+  const colY = 0.04 + colHeight / 2;
+  const j1Y = L.baseHeight - 0.04;
 
   const matBase  = new MeshStandardMaterial({ color: 0x1a2028, metalness: 0.7, roughness: 0.45 });
   const matLink  = new MeshStandardMaterial({ color: 0x2a323b, metalness: 0.6, roughness: 0.5 });
@@ -60,12 +86,12 @@ export function buildArmMesh(tool: Tool | null): ArmMesh {
   const base = new Group(); base.name = "BASE";
   const basePlate = cyl(0.20, 0.22, 0.04, matBase); basePlate.position.y = 0.02;
   const baseRing  = ring(0.18, 0.012, matAccent.clone()); baseRing.position.y = 0.045; baseRing.rotation.x = Math.PI / 2;
-  const baseCol   = cyl(0.13, 0.13, 0.18, matBase); baseCol.position.y = 0.13;
+  const baseCol   = cyl(0.13, 0.13, colHeight, matBase); baseCol.position.y = colY;
   base.add(basePlate, baseRing, baseCol);
   root.add(base);
 
   // J1 — rotate around Y at top of base
-  const j1 = new Group(); j1.name = "J1"; j1.position.y = 0.22; base.add(j1);
+  const j1 = new Group(); j1.name = "J1"; j1.position.y = j1Y; base.add(j1);
   const shoulderHead = cyl(0.14, 0.14, 0.13, matJoint, 24);
   shoulderHead.rotation.z = Math.PI / 2; shoulderHead.position.y = 0.04;
   j1.add(shoulderHead);
@@ -78,7 +104,6 @@ export function buildArmMesh(tool: Tool | null): ArmMesh {
   // J2 — shoulder, rotates around Z
   const j2 = new Group(); j2.name = "J2"; j2.position.set(0, 0.04, 0); j1.add(j2);
   const upper = new Group();
-  const armLen1 = 0.42;
   const upperLink = box(armLen1, 0.10, 0.10, matLink); upperLink.position.x = armLen1 / 2; upper.add(upperLink);
   const cable = box(armLen1 * 0.96, 0.025, 0.03, matJoint); cable.position.set(armLen1 / 2, 0.062, 0); upper.add(cable);
   j2.add(upper);
@@ -93,7 +118,6 @@ export function buildArmMesh(tool: Tool | null): ArmMesh {
     j3.add(r);
   }
   const fore = new Group();
-  const armLen2 = 0.34;
   const foreLink = box(armLen2, 0.08, 0.08, matLink); foreLink.position.x = armLen2 / 2; fore.add(foreLink);
   j3.add(fore);
 
@@ -105,19 +129,19 @@ export function buildArmMesh(tool: Tool | null): ArmMesh {
   j4.add(wRing1);
 
   // J5 — wrist 2, rotates around Z
-  const j5 = new Group(); j5.name = "J5"; j5.position.x = 0.10; j4.add(j5);
+  const j5 = new Group(); j5.name = "J5"; j5.position.x = j5xOffset; j4.add(j5);
   const wrist2 = cyl(0.050, 0.050, 0.09, matJoint, 24); wrist2.rotation.x = Math.PI / 2;
   j5.add(wrist2);
-  const wRing2 = ring(0.048, 0.007, matAccent.clone()); wRing2.position.set(0, 0, 0.046);
+  const wRing2 = ring(0.048, 0.007, matAccent.clone()); wRing2.position.set(0, 0, j6zOffset * 0.84);
   j5.add(wRing2);
 
   // J6 — wrist 3, baked rotation.x = π/2 so flange points forward; driven axis = y
   const j6 = new Group(); j6.name = "J6";
-  j6.position.x = 0; j6.position.z = 0.055; j6.rotation.x = Math.PI / 2;
+  j6.position.x = 0; j6.position.z = j6zOffset; j6.rotation.x = Math.PI / 2;
   j5.add(j6);
-  const flange = cyl(0.045, 0.045, 0.025, matJoint, 24); flange.position.y = 0.0125;
+  const flange = cyl(0.045, 0.045, flangeLen, matJoint, 24); flange.position.y = flangeLen / 2;
   j6.add(flange);
-  const flangeRing = ring(0.043, 0.006, matAccent.clone()); flangeRing.rotation.x = Math.PI / 2; flangeRing.position.y = 0.025;
+  const flangeRing = ring(0.043, 0.006, matAccent.clone()); flangeRing.rotation.x = Math.PI / 2; flangeRing.position.y = flangeLen;
   j6.add(flangeRing);
 
   // Swappable tool — tcp group is its child so the FK TCP follows tool length

@@ -5,6 +5,8 @@ import type { Robot } from "@/types";
 import { Panel, Stat } from "@/components/common";
 import { Arm3D } from "@/components/three/Arm3D";
 import { jointStateFor } from "@/lib/fleet";
+import { useDocStore } from "@/store/useDocStore";
+import { resolveRobot } from "@/lib/robots";
 
 interface Props { robot: Robot | undefined; }
 
@@ -15,6 +17,8 @@ export function TeleopScreen({ robot }: Props) {
   const [angles, setAngles] = useState<number[]>([0, -60, 90, 0, 40, 0]);
   const seed = parseInt(robot?.id.replace("ARM-", "") || "1", 10);
   const joints = jointStateFor(seed);
+  const robotId = useDocStore(s => s.doc.robotId);
+  const activeRobot = resolveRobot(robotId);
 
   const jog = (i: number, dir: 1 | -1) => setAngles(a => a.map((v, k) => k === i ? +(v + dir * step).toFixed(2) : v));
 
@@ -23,7 +27,8 @@ export function TeleopScreen({ robot }: Props) {
       <div className="teleop-arm-grid">
         <Panel title={`TELEOP · ${robot?.id ?? "—"}`} pad={false} style={{ gridColumn: "1 / span 2", gridRow: "1" }}>
           <div className="teleop-3d">
-            <Arm3D jointAngles={angles} width="100%" height="100%" reach={robot?.reach ?? 1.0} />
+            <Arm3D key={activeRobot.id} jointAngles={angles} width="100%" height="100%"
+              reach={activeRobot.reach} robot={activeRobot} />
           </div>
         </Panel>
 

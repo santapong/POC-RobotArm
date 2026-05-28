@@ -12,9 +12,9 @@ import {
   Vector3, WebGLRenderer,
   ArrowHelper,
 } from "three";
-import type { Tool, Trajectory, Vec3, Waypoint } from "@/types";
+import type { RobotModel, Tool, Trajectory, Vec3, Waypoint } from "@/types";
 import { applyJointAngles, buildArmMesh, buildToolMesh, type ArmMesh } from "@/lib/three/arm-mesh";
-import { armTCP } from "@/lib/three/fk";
+import { armTCP, setActiveRobot } from "@/lib/three/fk";
 import { OrbitControls } from "@/lib/three/orbit-controls";
 
 export interface Arm3DProps {
@@ -31,6 +31,11 @@ export interface Arm3DProps {
   trajectory?: Trajectory | null;     // convenience — uses .waypoints
   selectedWaypoint?: number | null;
   tool?: Tool | null;
+  // Optional RobotModel — drives the link lengths the schematic mesh and the
+  // FK use, plus the workspace-sphere radius. Changing robots should be done
+  // via React `key={robotId+":"+toolId}` so the component remounts (the arm
+  // structure changes top-to-bottom, unlike a tool swap which is local to j6).
+  robot?: RobotModel | null;
 }
 
 interface ArmState {
@@ -60,6 +65,7 @@ export function Arm3D({
   pathPoints = null, waypoints = null, trajectory = null,
   selectedWaypoint = null,
   tool = null,
+  robot = null,
 }: Arm3DProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef<ArmState | null>(null);
@@ -70,6 +76,11 @@ export function Arm3D({
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
+
+    // Set the active robot BEFORE building the arm/path so the FK cache
+    // (armTCP) rebuilds with the right link lengths and the green path /
+    // waypoint spheres sit on the new tool tip.
+    setActiveRobot(robot ?? null);
 
     const W = mount.clientWidth || 600;
     const H = mount.clientHeight || 400;
@@ -114,16 +125,19 @@ export function Arm3D({
     triad.position.set(-1.3, 0.01, 1.3);
     scene.add(triad);
 
+    // Workspace radius prefers the active robot's reach so the sphere sized
+    // for an ABB IRB 1300-7/1.40 actually looks 1.4 m wide.
+    const wsRadius = robot?.reach ?? reach;
     if (showWorkspace) {
       const ws = new Mesh(
-        new SphereGeometry(reach, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2 + 0.2),
+        new SphereGeometry(wsRadius, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2 + 0.2),
         new MeshBasicMaterial({ color: 0x38bdf8, wireframe: true, opacity: 0.07, transparent: true }),
       );
-      ws.position.y = 0.22;
+      ws.position.y = robot?.links.baseHeight ?? 0.22;
       scene.add(ws);
     }
 
-    const arm = buildArmMesh(tool ?? null);
+    const arm = buildArmMesh(tool ?? null, robot ?? null);
     scene.add(arm.root);
 
     const goalMarker = new Mesh(
