@@ -204,6 +204,10 @@ function CAMViewer3D({
   React.useEffect(() => {
     const mount = mountRef.current;
     if (!mount || !window.THREE) return;
+    // Make this viewer's tool the active one BEFORE building the arm/path, so
+    // the FK cache (armTCP) is rebuilt for this tool and the path/waypoints sit
+    // on the tool. (The viewer remounts on tool change via its React key.)
+    if (tool !== undefined) setActiveTool(tool);
     const W = mount.clientWidth || 800;
     const H = mount.clientHeight || 500;
 

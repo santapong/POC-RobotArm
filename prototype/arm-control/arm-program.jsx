@@ -48,11 +48,13 @@ function opTrajectory(op) {
 function compileJob(job) {
   const all = [];
   let tOffset = 0, pathLength = 0, sing = 0, coll = 0, reach = 0, idc = 0;
-  (job.ops || []).filter(o => o.enabled).forEach((op, oi) => {
+  (job.ops || []).filter(o => o.enabled).forEach((op) => {
     const t = opTrajectory(op);
     if (!t) return;
     t.waypoints.forEach((wp, wi) => {
-      if (oi > 0 && wi === 0 && wp.name === "HOME") return;  // drop duplicate mid-program HOME
+      // drop a leading HOME only once we've already emitted waypoints, so the
+      // program always starts with a HOME even if earlier ops produced nothing
+      if (all.length > 0 && wi === 0 && wp.name === "HOME") return;
       all.push({ ...wp, id: ++idc, t: +(wp.t + tOffset).toFixed(3), op: op.name });
     });
     if (all.length) tOffset = all[all.length - 1].t;
@@ -132,7 +134,15 @@ function ProgramScreen({ robot, onGoto }) {
     setJob(j => ({ ...j, ops: [...j.ops, newOp] }));
     setSelId(nid);
   };
-  const delOp = (id) => setJob(j => ({ ...j, ops: j.ops.filter(o => o.id !== id) }));
+  const delOp = (id) => {
+    setJob(j => ({ ...j, ops: j.ops.filter(o => o.id !== id) }));
+    // if the deleted op was selected, move selection to a surviving op so the
+    // inspector + surface-clicks don't keep targeting a now-missing id
+    if (id === selId) {
+      const rest = job.ops.filter(o => o.id !== id);
+      setSelId(rest.length ? rest[0].id : null);
+    }
+  };
   const moveOp = (id, dir) => setJob(j => {
     const i = j.ops.findIndex(o => o.id === id), ni = i + dir;
     if (i < 0 || ni < 0 || ni >= j.ops.length) return j;
