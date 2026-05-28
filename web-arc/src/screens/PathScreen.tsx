@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Robot, Trajectory, Vec3 } from "@/types";
 import { buildPathSamples, buildVelocityProfile, interpolateAtTime } from "@/lib/trajectory";
 import { Arm3D } from "@/components/three/Arm3D";
-import { Panel, Stat } from "@/components/common";
+import { Panel, SplitScreen, Stat, type SplitNode } from "@/components/common";
 import { useUiStore } from "@/store/useUiStore";
 import { useDocStore } from "@/store/useDocStore";
 import { resolveRobot } from "@/lib/robots";
@@ -73,152 +73,168 @@ export function PathScreen(_props: PathScreenProps) {
   const sel = traj.waypoints[selWp];
   const jumpTo = (i: number) => { setSelWp(i); setPlayT(traj.waypoints[i].t); setPlaying(false); };
 
-  return (
-    <div className="screen path">
-      <div className="path-grid">
-        <Panel
-          title={`▸ TRAJECTORY · ${traj.name}`}
-          right={
-            <span className="mono dim" style={{ fontSize: 10 }}>{traj.id} · {traj.author}</span>
-          }
-          pad={false}
-          style={{ gridColumn: "1 / span 2", gridRow: "1" }}
-        >
-          <div className="path-3d">
-            <Arm3D
-              key={activeRobot.id}
-              jointAngles={live ? live.joints : traj.waypoints[0].joints}
-              pathPoints={pathPoints}
-              waypoints={traj.waypoints}
-              selectedWaypoint={selWp}
-              reach={activeRobot.reach}
-              robot={activeRobot}
-              width="100%"
-              height="100%"
-            />
-            <div className="cam-hud-tl">
-              <div className="mono" style={{ color: "var(--ok)" }}>● PATH · 200 SAMPLES</div>
-              <div className="mono dim" style={{ fontSize: 9 }}>{traj.waypoints.length} WAYPOINTS</div>
-            </div>
-            <div className="cam-hud-tr mono dim">drag · orbit  ·  scroll · zoom  ·  right · pan</div>
-            <div className="play-bar">
-              <button className="play-btn" onClick={() => setPlaying(p => !p)}>{playing ? "❚❚" : "▶"}</button>
-              <button className="play-btn small" onClick={() => { setPlayT(0); setPlaying(false); }}>⏮</button>
-              <button className="play-btn small" onClick={() => { setPlayT(traj.totalTime); setPlaying(false); }}>⏭</button>
-              <div className="play-time mono">{playT.toFixed(2)} / {traj.totalTime.toFixed(2)}s</div>
-              <input className="play-scrub" type="range" min={0} max={traj.totalTime} step={0.01}
-                value={playT} onChange={e => { setPlayT(+e.target.value); setPlaying(false); }} />
-              <div style={{ display: "flex", gap: 2 }}>
-                {[0.25, 0.5, 1, 2].map(s => (
-                  <button key={s} className={"chip" + (speed === s ? " on" : "")} onClick={() => setSpeed(s)}>{s}×</button>
-                ))}
-              </div>
-            </div>
+  const trajPanel = (
+    <Panel
+      title={`▸ TRAJECTORY · ${traj.name}`}
+      right={<span className="mono dim" style={{ fontSize: 10 }}>{traj.id} · {traj.author}</span>}
+      pad={false}
+    >
+      <div className="path-3d">
+        <Arm3D
+          key={activeRobot.id}
+          jointAngles={live ? live.joints : traj.waypoints[0].joints}
+          pathPoints={pathPoints}
+          waypoints={traj.waypoints}
+          selectedWaypoint={selWp}
+          reach={activeRobot.reach}
+          robot={activeRobot}
+          width="100%"
+          height="100%"
+        />
+        <div className="cam-hud-tl">
+          <div className="mono" style={{ color: "var(--ok)" }}>● PATH · 200 SAMPLES</div>
+          <div className="mono dim" style={{ fontSize: 9 }}>{traj.waypoints.length} WAYPOINTS</div>
+        </div>
+        <div className="cam-hud-tr mono dim">drag · orbit  ·  scroll · zoom  ·  right · pan</div>
+        <div className="play-bar">
+          <button className="play-btn" onClick={() => setPlaying(p => !p)}>{playing ? "❚❚" : "▶"}</button>
+          <button className="play-btn small" onClick={() => { setPlayT(0); setPlaying(false); }}>⏮</button>
+          <button className="play-btn small" onClick={() => { setPlayT(traj.totalTime); setPlaying(false); }}>⏭</button>
+          <div className="play-time mono">{playT.toFixed(2)} / {traj.totalTime.toFixed(2)}s</div>
+          <input className="play-scrub" type="range" min={0} max={traj.totalTime} step={0.01}
+            value={playT} onChange={e => { setPlayT(+e.target.value); setPlaying(false); }} />
+          <div style={{ display: "flex", gap: 2 }}>
+            {[0.25, 0.5, 1, 2].map(s => (
+              <button key={s} className={"chip" + (speed === s ? " on" : "")} onClick={() => setSpeed(s)}>{s}×</button>
+            ))}
           </div>
-        </Panel>
-
-        <Panel title="WAYPOINTS" pad={false} style={{ gridColumn: "3", gridRow: "1 / span 2" }}>
-          <div className="wplist">
-            {traj.waypoints.map((wp, i) => {
-              const isSel = i === selWp;
-              const isCur = live && live.segment === i;
-              return (
-                <button
-                  key={wp.id}
-                  className={"wprow" + (isSel ? " sel" : "") + (isCur ? " cur" : "")}
-                  onClick={() => jumpTo(i)}
-                >
-                  <div className="wprow-num">
-                    <span className="mono">{String(i + 1).padStart(2, "0")}</span>
-                    <span className={"wp-type " + (wp.type === "MoveL" ? "lin" : "joint")}>{wp.type}</span>
-                  </div>
-                  <div>
-                    <div className="mono wprow-name">{wp.name}</div>
-                    <div className="wprow-meta mono">
-                      <span>X {wp.tcp[0].toFixed(3)}</span>
-                      <span>Y {wp.tcp[1].toFixed(3)}</span>
-                      <span>Z {wp.tcp[2].toFixed(3)}</span>
-                    </div>
-                    {wp.io && (
-                      <div className="wprow-io mono" style={{ color: "var(--magenta)" }}>{wp.io.label}</div>
-                    )}
-                  </div>
-                  <div className="wprow-t mono">{wp.t.toFixed(2)}s</div>
-                </button>
-              );
-            })}
-          </div>
-        </Panel>
-
-        <Panel title="MOTION PROFILE · TCP"
-          right={
-            <div style={{ display: "flex", gap: 10, fontSize: 10 }}>
-              <span className="mono" style={{ color: "var(--ok)" }}>—— VEL</span>
-              <span className="mono" style={{ color: "var(--warn)" }}>- - ACC</span>
-            </div>
-          }
-          style={{ gridColumn: "1 / span 2", gridRow: "2" }}
-        >
-          <VelocityChart profile={profile} waypoints={traj.waypoints} playT={playT} totalT={traj.totalTime}
-            onScrub={(t) => { setPlayT(t); setPlaying(false); }} />
-        </Panel>
-
-        <Panel title={`▸ WP-${String(selWp + 1).padStart(2, "0")} · ${sel.name}`}
-          style={{ gridColumn: "1 / span 2", gridRow: "3" }}>
-          <div className="wp-edit-grid">
-            <div className="wp-edit-col">
-              <div className="form-row"><span className="tag dim">NAME</span>
-                <input className="inp" defaultValue={sel.name} /></div>
-              <div className="form-row"><span className="tag dim">TIME</span>
-                <input className="inp" defaultValue={`${sel.t.toFixed(2)}s`} /></div>
-              <div className="form-row"><span className="tag dim">DWELL</span>
-                <input className="inp" defaultValue={`${sel.dwell}s`} /></div>
-            </div>
-            <div className="wp-edit-col">
-              <div className="tag dim">TCP POSE · base_link</div>
-              <div className="wp-tcp">
-                {(["X", "Y", "Z"] as const).map((axis, i) => (
-                  <div key={axis} className="wp-tcp-row">
-                    <span className="tag" style={{ width: 16 }}>{axis}</span>
-                    <input className="inp mono" defaultValue={sel.tcp[i].toFixed(3)} />
-                    <span className="tag dim">m</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="wp-edit-col">
-              <div className="tag dim">JOINTS · J1-J6</div>
-              <div className="wp-joints">
-                {sel.joints.map((j, i) => (
-                  <div key={i} className="wp-joint-row">
-                    <span className="mono" style={{ fontSize: 9, color: "var(--ok)", width: 22 }}>J{i + 1}</span>
-                    <input className="inp mono" defaultValue={j.toFixed(2)} style={{ width: 70 }} />
-                    <span className="tag dim">°</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="wp-edit-col">
-              <Stat label="VEL" value={`${sel.vel}%`} />
-              <Stat label="ACC" value={`${sel.acc}%`} />
-              <Stat label="BLEND r" value={`${sel.blend}mm`} />
-            </div>
-          </div>
-        </Panel>
-
-        <Panel title="METRICS · ANALYSIS" style={{ gridColumn: "3", gridRow: "3" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <Stat label="CYCLE TIME" value={`${traj.totalTime.toFixed(2)}s`} color="var(--ok)" />
-            <Stat label="PATH LEN" value={`${traj.pathLength.toFixed(2)}m`} />
-            <Stat label="MAX TCP·v" value={`${traj.maxTCPSpeed.toFixed(2)} m/s`} />
-            <Stat label="MAX J·vel" value={`${traj.maxJointVel.toFixed(0)} °/s`} />
-            <Stat label="MAX J·acc" value={`${traj.maxJointAcc.toFixed(0)} °/s²`} />
-            <Stat label="WAYPOINTS" value={traj.waypoints.length} />
-          </div>
-        </Panel>
+        </div>
       </div>
-    </div>
+    </Panel>
   );
+
+  const wpListPanel = (
+    <Panel title="WAYPOINTS" pad={false}>
+      <div className="wplist">
+        {traj.waypoints.map((wp, i) => {
+          const isSel = i === selWp;
+          const isCur = live && live.segment === i;
+          return (
+            <button
+              key={wp.id}
+              className={"wprow" + (isSel ? " sel" : "") + (isCur ? " cur" : "")}
+              onClick={() => jumpTo(i)}
+            >
+              <div className="wprow-num">
+                <span className="mono">{String(i + 1).padStart(2, "0")}</span>
+                <span className={"wp-type " + (wp.type === "MoveL" ? "lin" : "joint")}>{wp.type}</span>
+              </div>
+              <div>
+                <div className="mono wprow-name">{wp.name}</div>
+                <div className="wprow-meta mono">
+                  <span>X {wp.tcp[0].toFixed(3)}</span>
+                  <span>Y {wp.tcp[1].toFixed(3)}</span>
+                  <span>Z {wp.tcp[2].toFixed(3)}</span>
+                </div>
+                {wp.io && (
+                  <div className="wprow-io mono" style={{ color: "var(--magenta)" }}>{wp.io.label}</div>
+                )}
+              </div>
+              <div className="wprow-t mono">{wp.t.toFixed(2)}s</div>
+            </button>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+
+  const velPanel = (
+    <Panel title="MOTION PROFILE · TCP"
+      right={
+        <div style={{ display: "flex", gap: 10, fontSize: 10 }}>
+          <span className="mono" style={{ color: "var(--ok)" }}>—— VEL</span>
+          <span className="mono" style={{ color: "var(--warn)" }}>- - ACC</span>
+        </div>
+      }
+    >
+      <VelocityChart profile={profile} waypoints={traj.waypoints} playT={playT} totalT={traj.totalTime}
+        onScrub={(t) => { setPlayT(t); setPlaying(false); }} />
+    </Panel>
+  );
+
+  const wpEditPanel = (
+    <Panel title={`▸ WP-${String(selWp + 1).padStart(2, "0")} · ${sel.name}`}>
+      <div className="wp-edit-grid">
+        <div className="wp-edit-col">
+          <div className="form-row"><span className="tag dim">NAME</span>
+            <input className="inp" defaultValue={sel.name} /></div>
+          <div className="form-row"><span className="tag dim">TIME</span>
+            <input className="inp" defaultValue={`${sel.t.toFixed(2)}s`} /></div>
+          <div className="form-row"><span className="tag dim">DWELL</span>
+            <input className="inp" defaultValue={`${sel.dwell}s`} /></div>
+        </div>
+        <div className="wp-edit-col">
+          <div className="tag dim">TCP POSE · base_link</div>
+          <div className="wp-tcp">
+            {(["X", "Y", "Z"] as const).map((axis, i) => (
+              <div key={axis} className="wp-tcp-row">
+                <span className="tag" style={{ width: 16 }}>{axis}</span>
+                <input className="inp mono" defaultValue={sel.tcp[i].toFixed(3)} />
+                <span className="tag dim">m</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="wp-edit-col">
+          <div className="tag dim">JOINTS · J1-J6</div>
+          <div className="wp-joints">
+            {sel.joints.map((j, i) => (
+              <div key={i} className="wp-joint-row">
+                <span className="mono" style={{ fontSize: 9, color: "var(--ok)", width: 22 }}>J{i + 1}</span>
+                <input className="inp mono" defaultValue={j.toFixed(2)} style={{ width: 70 }} />
+                <span className="tag dim">°</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="wp-edit-col">
+          <Stat label="VEL" value={`${sel.vel}%`} />
+          <Stat label="ACC" value={`${sel.acc}%`} />
+          <Stat label="BLEND r" value={`${sel.blend}mm`} />
+        </div>
+      </div>
+    </Panel>
+  );
+
+  const metricsPanel = (
+    <Panel title="METRICS · ANALYSIS">
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        <Stat label="CYCLE TIME" value={`${traj.totalTime.toFixed(2)}s`} color="var(--ok)" />
+        <Stat label="PATH LEN" value={`${traj.pathLength.toFixed(2)}m`} />
+        <Stat label="MAX TCP·v" value={`${traj.maxTCPSpeed.toFixed(2)} m/s`} />
+        <Stat label="MAX J·vel" value={`${traj.maxJointVel.toFixed(0)} °/s`} />
+        <Stat label="MAX J·acc" value={`${traj.maxJointAcc.toFixed(0)} °/s²`} />
+        <Stat label="WAYPOINTS" value={traj.waypoints.length} />
+      </div>
+    </Panel>
+  );
+
+  const layout: SplitNode = {
+    type: "split", direction: "h", key: "root",
+    children: [
+      { type: "split", direction: "v", key: "main", size: 70, children: [
+        { type: "leaf", key: "traj", size: 55, content: trajPanel },
+        { type: "leaf", key: "vel", size: 20, content: velPanel },
+        { type: "leaf", key: "wpedit", size: 25, content: wpEditPanel },
+      ]},
+      { type: "split", direction: "v", key: "right", size: 30, children: [
+        { type: "leaf", key: "wplist", size: 70, content: wpListPanel },
+        { type: "leaf", key: "metrics", size: 30, content: metricsPanel },
+      ]},
+    ],
+  };
+
+  return <SplitScreen id="path" className="screen path" node={layout} />;
 }
 
 // Compact velocity profile chart (TCP speed + acceleration, with waypoint

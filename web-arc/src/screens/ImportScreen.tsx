@@ -2,7 +2,7 @@
 // SAVE/UNDO/REDO chips of the prototype are wired to the doc store here.
 
 import { useState } from "react";
-import { Panel } from "@/components/common";
+import { Panel, SplitScreen, type SplitNode } from "@/components/common";
 import { downloadDoc } from "@/lib/doc";
 import { useCanRedo, useCanUndo, useDoc, useDocStore } from "@/store/useDocStore";
 
@@ -53,79 +53,105 @@ export function ImportScreen() {
     });
   };
 
-  return (
-    <div className="screen import">
-      <div className="import-grid">
-        <Panel title="ASSETS" pad={false} style={{ gridColumn: "1", gridRow: "1 / span 2" }}>
-          <div className="ftree">
-            {files.map(f => (
-              <button key={f.path} className={"ftree-file" + (f.path === sel ? " sel" : "")}
-                onClick={() => setSel(f.path)}>
-                <span className={"ft-type tag"} style={{ color: "var(--info)" }}>{f.type}</span>
-                <span className="ftree-name">{f.path}</span>
-                <span className="mono dim" style={{ fontSize: 9 }}>{(f.size / 1024).toFixed(1)} kB</span>
-              </button>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel title="PREVIEW" pad={false} style={{ gridColumn: "2", gridRow: "1" }}>
-          <div className="proged-wrap">
-            <div className="proged">
-              {EXAMPLE_PROG.split("\n").map((line, i) => (
-                <div key={i} className="proged-line">
-                  <span className="proged-num mono">{i + 1}</span>
-                  <span className="proged-text mono">{line}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </Panel>
-
-        <Panel title="INSPECTOR" style={{ gridColumn: "3", gridRow: "1" }}>
-          <div className="mono dim" style={{ fontSize: 10 }}>{sel}</div>
-          <hr className="hr" />
-          <div className="tag dim">VALIDATION</div>
-          {["SHA OK","SCHEMA OK","REFERENCES OK"].map(k =>
-            <div key={k} className="check-row"><span className="mono" style={{ color: "var(--ok)" }}>✓</span><span className="tag" style={{ color: "var(--fg-mute)" }}>{k}</span></div>
-          )}
-        </Panel>
-
-        <Panel title="EDITOR" pad={false} style={{ gridColumn: "1 / span 3", gridRow: "3" }}
-          right={
-            <div style={{ display: "flex", gap: 4 }}>
-              <span className="tag dim">UTF-8 · LF</span>
-              <button className={"chip" + (canUndo ? "" : " disabled")} onClick={() => undo()}>UNDO</button>
-              <button className={"chip" + (canRedo ? "" : " disabled")} onClick={() => redo()}>REDO</button>
-              <button className="chip on" onClick={() => downloadDoc(doc)}>SAVE · ⌘S</button>
-            </div>
-          }>
-          <div className="editor-wrap">
-            <textarea className="editor" value={code} onChange={e => setCode(e.target.value)} spellCheck={false} />
-          </div>
-        </Panel>
-
-        <Panel title="DROPZONE" pad={false} style={{ gridColumn: "2", gridRow: "2" }}>
-          <div className={"dropzone" + (drag ? " on" : "")}
-            onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-            onDragLeave={() => setDrag(false)}
-            onDrop={onDrop}>
-            <span className="mono" style={{ color: "var(--ok)" }}>DROP FILES HERE</span>
-            <span className="tag dim">URDF · STEP · STL · URPX · PY · JSON · CSV</span>
-          </div>
-        </Panel>
-
-        <Panel title="RECENT" pad={false} style={{ gridColumn: "3", gridRow: "2" }}>
-          <div className="recent">
-            {files.slice(0, 6).map(f => (
-              <button key={f.path} className="recent-row">
-                <span className="mono" style={{ fontSize: 10, flex: 1 }}>{f.path}</span>
-                <span className="mono dim" style={{ fontSize: 9 }}>{f.author}</span>
-              </button>
-            ))}
-          </div>
-        </Panel>
+  const assetsPanel = (
+    <Panel title="ASSETS" pad={false}>
+      <div className="ftree">
+        {files.map(f => (
+          <button key={f.path} className={"ftree-file" + (f.path === sel ? " sel" : "")}
+            onClick={() => setSel(f.path)}>
+            <span className={"ft-type tag"} style={{ color: "var(--info)" }}>{f.type}</span>
+            <span className="ftree-name">{f.path}</span>
+            <span className="mono dim" style={{ fontSize: 9 }}>{(f.size / 1024).toFixed(1)} kB</span>
+          </button>
+        ))}
       </div>
-    </div>
+    </Panel>
   );
+
+  const previewPanel = (
+    <Panel title="PREVIEW" pad={false}>
+      <div className="proged-wrap">
+        <div className="proged">
+          {EXAMPLE_PROG.split("\n").map((line, i) => (
+            <div key={i} className="proged-line">
+              <span className="proged-num mono">{i + 1}</span>
+              <span className="proged-text mono">{line}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Panel>
+  );
+
+  const inspectorPanel = (
+    <Panel title="INSPECTOR">
+      <div className="mono dim" style={{ fontSize: 10 }}>{sel}</div>
+      <hr className="hr" />
+      <div className="tag dim">VALIDATION</div>
+      {["SHA OK","SCHEMA OK","REFERENCES OK"].map(k =>
+        <div key={k} className="check-row"><span className="mono" style={{ color: "var(--ok)" }}>✓</span><span className="tag" style={{ color: "var(--fg-mute)" }}>{k}</span></div>
+      )}
+    </Panel>
+  );
+
+  const editorPanel = (
+    <Panel title="EDITOR" pad={false}
+      right={
+        <div style={{ display: "flex", gap: 4 }}>
+          <span className="tag dim">UTF-8 · LF</span>
+          <button className={"chip" + (canUndo ? "" : " disabled")} onClick={() => undo()}>UNDO</button>
+          <button className={"chip" + (canRedo ? "" : " disabled")} onClick={() => redo()}>REDO</button>
+          <button className="chip on" onClick={() => downloadDoc(doc)}>SAVE · ⌘S</button>
+        </div>
+      }>
+      <div className="editor-wrap">
+        <textarea className="editor" value={code} onChange={e => setCode(e.target.value)} spellCheck={false} />
+      </div>
+    </Panel>
+  );
+
+  const dropPanel = (
+    <Panel title="DROPZONE" pad={false}>
+      <div className={"dropzone" + (drag ? " on" : "")}
+        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={onDrop}>
+        <span className="mono" style={{ color: "var(--ok)" }}>DROP FILES HERE</span>
+        <span className="tag dim">URDF · STEP · STL · URPX · PY · JSON · CSV</span>
+      </div>
+    </Panel>
+  );
+
+  const recentPanel = (
+    <Panel title="RECENT" pad={false}>
+      <div className="recent">
+        {files.slice(0, 6).map(f => (
+          <button key={f.path} className="recent-row">
+            <span className="mono" style={{ fontSize: 10, flex: 1 }}>{f.path}</span>
+            <span className="mono dim" style={{ fontSize: 9 }}>{f.author}</span>
+          </button>
+        ))}
+      </div>
+    </Panel>
+  );
+
+  const layout: SplitNode = {
+    type: "split", direction: "v", key: "root",
+    children: [
+      { type: "split", direction: "h", key: "top", size: 60, children: [
+        { type: "leaf", key: "assets", size: 22, content: assetsPanel },
+        { type: "split", direction: "v", key: "mid", size: 50, children: [
+          { type: "leaf", key: "preview", size: 60, content: previewPanel },
+          { type: "leaf", key: "drop", size: 40, content: dropPanel },
+        ]},
+        { type: "split", direction: "v", key: "right", size: 28, children: [
+          { type: "leaf", key: "inspector", size: 55, content: inspectorPanel },
+          { type: "leaf", key: "recent", size: 45, content: recentPanel },
+        ]},
+      ]},
+      { type: "leaf", key: "editor", size: 40, content: editorPanel },
+    ],
+  };
+
+  return <SplitScreen id="import" className="screen import" node={layout} />;
 }

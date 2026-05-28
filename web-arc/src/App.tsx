@@ -6,12 +6,14 @@ import { ALERTS_INIT, buildFleet } from "@/lib/fleet";
 import { useGlobalShortcuts } from "@/hooks/useKeyboard";
 import { useUiStore } from "@/store/useUiStore";
 import { TopBar } from "@/components/shell/TopBar";
-import { SideNav } from "@/components/shell/SideNav";
+// Left sidenav removed — navigation is now driven by the ROBOT page's
+// right-edge toolbox rail (and the HOME button in the topbar to return).
 import { BottomBar } from "@/components/shell/BottomBar";
 import { TweaksPanel } from "@/components/shell/TweaksPanel";
 import { CommandConsole } from "@/components/console/CommandConsole";
 import { FleetScreen } from "@/screens/FleetScreen";
-import { RobotDetailScreen } from "@/screens/RobotDetailScreen";
+// RobotDetailScreen removed from routing — INSPECT now lives inside the
+// ROBOT page's toolbox rail as a flyout panel, no longer a separate screen.
 import { TeleopScreen } from "@/screens/TeleopScreen";
 import { CAMScreen } from "@/screens/CAMScreen";
 import { PathScreen } from "@/screens/PathScreen";
@@ -55,12 +57,15 @@ export default function App() {
   const selected = useMemo(() => fleet.find(r => r.id === selectedId), [fleet, selectedId]);
 
   return (
-    <div className="app" data-density={density} style={{ "--ok": accent } as React.CSSProperties}>
+    <div
+      className="app"
+      data-density={density}
+      style={{ "--ok": accent } as React.CSSProperties}
+    >
       <TopBar fleet={fleet} alerts={alerts} selected={selected} onAck={() => setScreen("logs")} />
-      <SideNav />
       <main className="main">
         {screen === "fleet"     && <FleetScreen fleet={fleet} alerts={alerts} />}
-        {screen === "robot"     && <RobotDetailScreen robot={selected} />}
+        {screen === "robot"     && <FleetScreen fleet={fleet} alerts={alerts} />}
         {screen === "teleop"    && <TeleopScreen robot={selected} />}
         {screen === "cam"       && <CAMScreen robot={selected} />}
         {screen === "path"      && <PathScreen robot={selected} />}

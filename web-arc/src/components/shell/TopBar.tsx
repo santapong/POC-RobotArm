@@ -3,6 +3,8 @@ import type { Alert, Robot, Status } from "@/types";
 import { useClock } from "@/hooks/useClock";
 import { useBreath } from "@/hooks/useBreath";
 import { utcDate, utcHMS } from "@/lib/format";
+import { resolveRobot } from "@/lib/robots";
+import { useDocStore } from "@/store/useDocStore";
 import { useUiStore } from "@/store/useUiStore";
 import { NAV } from "./nav";
 
@@ -20,6 +22,11 @@ export function TopBar({ fleet, alerts, selected, onAck }: TopBarProps) {
   const now = useClock();
   const breath = useBreath(1, 1500, 1);
   const screen = useUiStore(s => s.screen);
+  const setScreen = useUiStore(s => s.setScreen);
+  const tweaksOpen = useUiStore(s => s.tweaksOpen);
+  const toggleTweaks = useUiStore(s => s.toggleTweaks);
+  const docRobotId = useDocStore(s => s.doc.robotId);
+  const activeRobot = resolveRobot(docRobotId);
 
   const counts = useMemo(() => {
     const c: Record<Status, number> = { ACTIVE: 0, IDLE: 0, TELEOP: 0, FAULT: 0, OFFLINE: 0 };
@@ -32,6 +39,14 @@ export function TopBar({ fleet, alerts, selected, onAck }: TopBarProps) {
   return (
     <header className="topbar">
       <div className="topbar-l">
+        <button
+          className={"navtoggle" + (screen === "fleet" ? " active" : "")}
+          onClick={() => setScreen("fleet")}
+          title="Home — return to ROBOT page"
+          aria-label="Home — ROBOT page"
+        >
+          ▦
+        </button>
         <div className="brand">
           <svg width="22" height="22" viewBox="0 0 24 24">
             <rect x="9" y="20" width="6" height="2" fill="var(--ok)" />
@@ -44,7 +59,7 @@ export function TopBar({ fleet, alerts, selected, onAck }: TopBarProps) {
           </svg>
           <div>
             <div style={{ fontSize: 11, letterSpacing: ".18em", color: "var(--fg)" }}>ARC·OPS</div>
-            <div className="tag dim" style={{ fontSize: 9 }}>6-DoF ARM FLEET · web-arc</div>
+            <div className="tag dim" style={{ fontSize: 9 }}>6-DoF ROBOT CONSOLE · web-arc</div>
           </div>
         </div>
         <div className="breadcrumb">
@@ -52,7 +67,7 @@ export function TopBar({ fleet, alerts, selected, onAck }: TopBarProps) {
           <span>BAY-07 / EAST</span>
           <span className="dim">›</span>
           <span style={{ color: "var(--ok)" }}>{screenLabel}</span>
-          {selected && (screen === "robot" || screen === "teleop" || screen === "scene" || screen === "settings") && (
+          {selected && (screen === "fleet" || screen === "teleop" || screen === "scene" || screen === "settings") && (
             <>
               <span className="dim">›</span>
               <span className="mono">{selected.id}</span>
@@ -77,6 +92,22 @@ export function TopBar({ fleet, alerts, selected, onAck }: TopBarProps) {
             </div>
           ))}
         </div>
+
+        <button
+          className={"chip" + (screen === "program" ? " on" : "")}
+          onClick={() => setScreen("program")}
+          title={`Active robot model — click to open PROGRAM picker (${activeRobot.manufacturer} · ${activeRobot.payload}kg · ${(activeRobot.reach * 1000).toFixed(0)}mm)`}
+        >
+          ◉ {activeRobot.name}
+        </button>
+        <button
+          className={"chip" + (tweaksOpen ? " on" : "")}
+          onClick={toggleTweaks}
+          title="Display tweaks"
+          aria-pressed={tweaksOpen}
+        >
+          ⚙ TWEAKS
+        </button>
 
         <button className="alert-pill" onClick={onAck}>
           <span style={{ width: 6, height: 6, background: "var(--err)", borderRadius: "50%",

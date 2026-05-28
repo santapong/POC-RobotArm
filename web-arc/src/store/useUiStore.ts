@@ -13,25 +13,39 @@ export const SCREENS = [
 ] as const;
 export type Screen = typeof SCREENS[number];
 
+export type SceneBg = "dark" | "mid" | "light";
+
 export interface Tweaks {
   accent: string;
   density: "dense" | "comfy";
   showWorkspace: boolean;
   autoRotate3D: boolean;
   armCount: number;
+  showSingularity: boolean;
+  sceneBg: SceneBg;
 }
+
+/** Hex colors used by the WebGL viewers for scene.background / fog. */
+export const SCENE_BG_HEX: Record<SceneBg, number> = {
+  dark:  0x05080c,
+  mid:   0x121a24,
+  light: 0x223044,
+};
 
 interface UiState {
   screen: Screen;
   selectedId: string;
   tweaks: Tweaks;
   consoleOpen: boolean;
+  tweaksOpen: boolean;
   pendingTrajectory: Trajectory | null;
   setScreen: (s: Screen) => void;
   setSelectedId: (id: string) => void;
   setTweak: <K extends keyof Tweaks>(k: K, v: Tweaks[K]) => void;
   toggleConsole: () => void;
   setConsoleOpen: (open: boolean) => void;
+  toggleTweaks: () => void;
+  setTweaksOpen: (open: boolean) => void;
   // Hand a compiled trajectory to the PATH editor (replaces
   // window.GENERATED_TRAJECTORY).
   openInPath: (t: Trajectory) => void;
@@ -44,6 +58,8 @@ const TWEAK_DEFAULTS: Tweaks = {
   showWorkspace: true,
   autoRotate3D: false,
   armCount: 30,
+  showSingularity: false,
+  sceneBg: "mid",
 };
 
 export const useUiStore = create<UiState>((set) => ({
@@ -51,12 +67,15 @@ export const useUiStore = create<UiState>((set) => ({
   selectedId: "ARM-003",
   tweaks: TWEAK_DEFAULTS,
   consoleOpen: false,
+  tweaksOpen: false,
   pendingTrajectory: null,
   setScreen: (screen) => set({ screen }),
   setSelectedId: (selectedId) => set({ selectedId }),
   setTweak: (k, v) => set((s) => ({ tweaks: { ...s.tweaks, [k]: v } })),
   toggleConsole: () => set((s) => ({ consoleOpen: !s.consoleOpen })),
   setConsoleOpen: (consoleOpen) => set({ consoleOpen }),
+  toggleTweaks: () => set((s) => ({ tweaksOpen: !s.tweaksOpen })),
+  setTweaksOpen: (tweaksOpen) => set({ tweaksOpen }),
   openInPath: (t) => set({ pendingTrajectory: t, screen: "path" }),
   clearPending: () => set({ pendingTrajectory: null }),
 }));

@@ -20,7 +20,12 @@ export class OrbitControls {
   maxPolarAngle = Math.PI;
   autoRotate = false;
   autoRotateSpeed = 0.5;
-  zoomSpeed = 1.0;
+  // Input gain. Lower = slower / more deliberate camera moves. 0.4 was
+  // measured against the previous hardcoded 1.0 — drag still feels direct
+  // but no longer flings the view when the user nudges the mouse.
+  rotateSpeed = 0.4;
+  panSpeed = 0.5;
+  zoomSpeed = 0.5;
 
   private _offset = new Vector3();
   private _spherical = new Spherical();
@@ -77,10 +82,10 @@ export class OrbitControls {
     const dy = e.clientY - this._startY;
     this._startX = e.clientX; this._startY = e.clientY;
     if (this._state === "rotate") {
-      this._sphericalDelta.theta -= 2 * Math.PI * dx / this.domElement.clientHeight;
-      this._sphericalDelta.phi   -= 2 * Math.PI * dy / this.domElement.clientHeight;
+      this._sphericalDelta.theta -= 2 * Math.PI * dx * this.rotateSpeed / this.domElement.clientHeight;
+      this._sphericalDelta.phi   -= 2 * Math.PI * dy * this.rotateSpeed / this.domElement.clientHeight;
     } else if (this._state === "pan") {
-      this._pan(dx, dy);
+      this._pan(dx * this.panSpeed, dy * this.panSpeed);
     }
   };
   private _onPointerUp = (): void => { this._state = "none"; };

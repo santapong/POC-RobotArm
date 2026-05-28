@@ -5,6 +5,11 @@
 import type { CSSProperties, ReactNode } from "react";
 import type { Status } from "@/types";
 
+export { SplitScreen } from "./SplitScreen";
+export type { SplitNode, SplitDir, SplitScreenProps } from "./SplitScreen";
+export { FloatingPanel } from "./FloatingPanel";
+export type { FloatingPanelProps, FloatPreset } from "./FloatingPanel";
+
 export interface PanelProps {
   title?: ReactNode;
   right?: ReactNode;

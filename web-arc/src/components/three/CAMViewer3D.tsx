@@ -17,6 +17,7 @@ import { armTCP, setActiveRobot, setActiveTool } from "@/lib/three/fk";
 import { buildPartMesh } from "@/lib/three/part-mesh";
 import { buildPathSamples } from "@/lib/trajectory";
 import { OrbitControls } from "@/lib/three/orbit-controls";
+import { SCENE_BG_HEX, useUiStore } from "@/store/useUiStore";
 
 export interface SurfaceHit { point: [number, number, number]; normal: [number, number, number]; }
 
@@ -43,6 +44,10 @@ interface ViewerState {
   rebuildPicks: (picks: Pick[]) => void;
   rebuildPath: (t: Trajectory | null) => void;
   target: number[]; current: number[];
+  singularityGroup: Group;
+  wristSingHalo: Mesh;
+  tcpWorld: Vector3;
+  showSingularity: boolean;
   raf: number | null; alive: boolean;
 }
 
@@ -53,6 +58,8 @@ export function CAMViewer3D({
 }: CAMViewer3DProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef<ViewerState | null>(null);
+  const sceneBg = useUiStore(s => s.tweaks.sceneBg);
+  const showSingularity = useUiStore(s => s.tweaks.showSingularity);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -68,8 +75,9 @@ export function CAMViewer3D({
     const H = mount.clientHeight || 500;
 
     const scene = new Scene();
-    scene.background = new Color(0x05080c);
-    scene.fog = new Fog(0x05080c, 4, 9);
+    const bgHex = SCENE_BG_HEX[sceneBg] ?? SCENE_BG_HEX.dark;
+    scene.background = new Color(bgHex);
+    scene.fog = new Fog(bgHex, 4, 9);
 
     const camera = new PerspectiveCamera(40, W / H, 0.05, 50);
     camera.position.set(1.4, 1.1, 1.6);
@@ -92,6 +100,36 @@ export function CAMViewer3D({
       new MeshStandardMaterial({ color: 0x070b10, metalness: 0.4, roughness: 0.7 }),
     );
     floor.rotation.x = -Math.PI / 2; floor.position.y = -0.001; scene.add(floor);
+
+    // Singularity overlay — same scheme as Arm3D: a red shoulder disc at
+    // the base z-axis, an amber elbow ring at the workspace boundary, and a
+    // dynamic wrist halo on the TCP when J5 ≈ 0 (driven by the animate loop).
+    const singularityGroup = new Group();
+    singularityGroup.name = "SINGULARITIES";
+    singularityGroup.visible = showSingularity;
+    const baseHeight = robot?.links.baseHeight ?? 0.22;
+    const shoulderDisc = new Mesh(
+      new RingGeometry(0.04, 0.16, 36),
+      new MeshBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.35, side: DoubleSide }),
+    );
+    shoulderDisc.rotation.x = -Math.PI / 2;
+    shoulderDisc.position.y = baseHeight + 0.001;
+    singularityGroup.add(shoulderDisc);
+    const reach = robot?.reach ?? 1.0;
+    const elbowRing = new Mesh(
+      new RingGeometry(reach - 0.01, reach + 0.01, 64, 1, 0, Math.PI),
+      new MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.32, side: DoubleSide }),
+    );
+    elbowRing.rotation.x = -Math.PI / 2;
+    elbowRing.position.y = baseHeight;
+    singularityGroup.add(elbowRing);
+    const wristSingHalo = new Mesh(
+      new SphereGeometry(0.055, 18, 18),
+      new MeshBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.0, wireframe: true }),
+    );
+    wristSingHalo.visible = false;
+    scene.add(singularityGroup);
+    scene.add(wristSingHalo);
 
     const arm = buildArmMesh(tool ?? null, robot ?? null);
     scene.add(arm.root);
@@ -178,6 +216,9 @@ export function CAMViewer3D({
       hoverGrp, hoverDot, hoverRing, hoverNormal,
       pickGroup, pathGroup, rebuildPicks, rebuildPath,
       target: initial.slice(), current: initial.slice(),
+      singularityGroup, wristSingHalo,
+      tcpWorld: new Vector3(),
+      showSingularity,
       raf: null, alive: true,
     };
     stateRef.current = state;
@@ -253,10 +294,25 @@ export function CAMViewer3D({
       const s = stateRef.current;
       if (!s || !s.alive) return;
       s.raf = requestAnimationFrame(animate);
-      for (let i = 0; i < 6; i++) s.current[i] += (s.target[i] - s.current[i]) * 0.1;
+      for (let i = 0; i < 6; i++) s.current[i] += (s.target[i] - s.current[i]) * 0.04;
       applyJointAngles(s.arm, s.current);
       const t = performance.now() / 400;
       s.hoverRing.scale.setScalar(1 + 0.15 * Math.sin(t));
+
+      if (s.showSingularity) {
+        const j5 = s.current[4] ?? 0;
+        const nearSing = Math.abs(j5) < 6 * Math.PI / 180;
+        s.wristSingHalo.visible = nearSing;
+        if (nearSing) {
+          s.arm.tcp.getWorldPosition(s.tcpWorld);
+          s.wristSingHalo.position.copy(s.tcpWorld);
+          (s.wristSingHalo.material as MeshBasicMaterial).opacity = 0.45 + 0.35 * Math.sin(performance.now() / 180);
+          s.wristSingHalo.scale.setScalar(1 + 0.18 * Math.sin(performance.now() / 220));
+        }
+      } else if (s.wristSingHalo.visible) {
+        s.wristSingHalo.visible = false;
+      }
+
       s.controls.update();
       s.renderer.render(s.scene, s.camera);
     };
@@ -320,6 +376,20 @@ export function CAMViewer3D({
     const s = stateRef.current; if (!s) return;
     s.rebuildPath(generatedTrajectory);
   }, [generatedTrajectory]);
+
+  useEffect(() => {
+    const s = stateRef.current; if (!s) return;
+    const hex = SCENE_BG_HEX[sceneBg] ?? SCENE_BG_HEX.dark;
+    (s.scene.background as Color)?.setHex(hex);
+    if (s.scene.fog) (s.scene.fog as Fog).color.setHex(hex);
+  }, [sceneBg]);
+
+  useEffect(() => {
+    const s = stateRef.current; if (!s) return;
+    s.showSingularity = showSingularity;
+    s.singularityGroup.visible = showSingularity;
+    if (!showSingularity) s.wristSingHalo.visible = false;
+  }, [showSingularity]);
 
   return <div ref={mountRef} style={{ width: "100%", height: "100%", position: "relative", overflow: "hidden", cursor: "crosshair" }} />;
 }

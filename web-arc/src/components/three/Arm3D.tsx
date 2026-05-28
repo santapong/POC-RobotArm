@@ -16,6 +16,7 @@ import type { RobotModel, Tool, Trajectory, Vec3, Waypoint } from "@/types";
 import { applyJointAngles, buildArmMesh, buildToolMesh, type ArmMesh } from "@/lib/three/arm-mesh";
 import { armTCP, setActiveRobot } from "@/lib/three/fk";
 import { OrbitControls } from "@/lib/three/orbit-controls";
+import { SCENE_BG_HEX, useUiStore } from "@/store/useUiStore";
 
 export interface Arm3DProps {
   jointAngles: number[];
@@ -51,6 +52,9 @@ interface ArmState {
   tcpWorld: Vector3;
   playMarker: Mesh;
   playMarkerHalo: Mesh;
+  singularityGroup: Group;
+  wristSingHalo: Mesh;
+  showSingularity: boolean;
   rebuildPath?: (pts: Vec3[] | null, wps: Waypoint[] | null, selIdx: number | null) => void;
   raf: number | null;
   alive: boolean;
@@ -69,6 +73,8 @@ export function Arm3D({
 }: Arm3DProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef<ArmState | null>(null);
+  const sceneBg = useUiStore(s => s.tweaks.sceneBg);
+  const showSingularity = useUiStore(s => s.tweaks.showSingularity);
 
   // resolve waypoints from either prop or trajectory
   const wps = waypoints ?? trajectory?.waypoints ?? null;
@@ -86,8 +92,9 @@ export function Arm3D({
     const H = mount.clientHeight || 400;
 
     const scene = new Scene();
-    scene.background = new Color(0x05080c);
-    scene.fog = new Fog(0x05080c, 4, 9);
+    const bgHex = SCENE_BG_HEX[sceneBg] ?? SCENE_BG_HEX.dark;
+    scene.background = new Color(bgHex);
+    scene.fog = new Fog(bgHex, 4, 9);
 
     const camera = new PerspectiveCamera(40, W / H, 0.05, 50);
     camera.position.set(1.6, 1.3, 1.9);
@@ -116,13 +123,17 @@ export function Arm3D({
     );
     floor.rotation.x = -Math.PI / 2; floor.position.y = -0.001; scene.add(floor);
 
+    // World-origin triad. Sits right at (0,0,0) so the user can read off
+    // the global frame the FK / IK / picks are evaluated in. The arrow lengths
+    // are slightly longer (0.3 m) than the corner marker we had before so the
+    // origin is still legible when the robot stands on top of it.
     const triad = new Group();
     triad.add(
-      new ArrowHelper(new Vector3(1, 0, 0), new Vector3(), 0.25, 0xef4444, 0.06, 0.04),
-      new ArrowHelper(new Vector3(0, 1, 0), new Vector3(), 0.25, 0x4ade80, 0.06, 0.04),
-      new ArrowHelper(new Vector3(0, 0, 1), new Vector3(), 0.25, 0x38bdf8, 0.06, 0.04),
+      new ArrowHelper(new Vector3(1, 0, 0), new Vector3(), 0.30, 0xef4444, 0.07, 0.045),
+      new ArrowHelper(new Vector3(0, 1, 0), new Vector3(), 0.30, 0x4ade80, 0.07, 0.045),
+      new ArrowHelper(new Vector3(0, 0, 1), new Vector3(), 0.30, 0x38bdf8, 0.07, 0.045),
     );
-    triad.position.set(-1.3, 0.01, 1.3);
+    triad.position.set(0, 0.005, 0);
     scene.add(triad);
 
     // Workspace radius prefers the active robot's reach so the sphere sized
@@ -136,6 +147,41 @@ export function Arm3D({
       ws.position.y = robot?.links.baseHeight ?? 0.22;
       scene.add(ws);
     }
+
+    // Singularity overlay (toggleable). Renders the *known* singularity
+    // zones for a 6-DoF wrist-partitioned arm:
+    //   - shoulder singularity: a thin red disc at the base z-axis where
+    //     small TCP nudges demand huge J1 motion.
+    //   - elbow singularity: a wireframe ring at the workspace boundary
+    //     (sphere of radius `reach`) where the arm is fully extended.
+    // Wrist singularity (J5 ≈ 0) is dynamic — a yellow halo is drawn on the
+    // tool tip from the animate loop when the joint angle drops below ~6°.
+    const singularityGroup = new Group();
+    singularityGroup.name = "SINGULARITIES";
+    singularityGroup.visible = showSingularity;
+    const baseHeight = robot?.links.baseHeight ?? 0.22;
+    const shoulderDisc = new Mesh(
+      new RingGeometry(0.04, 0.16, 36),
+      new MeshBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.35, side: DoubleSide }),
+    );
+    shoulderDisc.rotation.x = -Math.PI / 2;
+    shoulderDisc.position.y = baseHeight + 0.001;
+    singularityGroup.add(shoulderDisc);
+    const elbowReach = robot?.reach ?? reach;
+    const elbowRing = new Mesh(
+      new RingGeometry(elbowReach - 0.01, elbowReach + 0.01, 64, 1, 0, Math.PI),
+      new MeshBasicMaterial({ color: 0xfbbf24, transparent: true, opacity: 0.32, side: DoubleSide }),
+    );
+    elbowRing.rotation.x = -Math.PI / 2;
+    elbowRing.position.y = baseHeight;
+    singularityGroup.add(elbowRing);
+    const wristSingHalo = new Mesh(
+      new SphereGeometry(0.055, 18, 18),
+      new MeshBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.0, wireframe: true }),
+    );
+    wristSingHalo.visible = false;
+    scene.add(singularityGroup);
+    scene.add(wristSingHalo);
 
     const arm = buildArmMesh(tool ?? null, robot ?? null);
     scene.add(arm.root);
@@ -172,6 +218,8 @@ export function Arm3D({
       tcpWorld: new Vector3(),
       playMarker: null as unknown as Mesh,        // set below
       playMarkerHalo: null as unknown as Mesh,
+      singularityGroup, wristSingHalo,
+      showSingularity,
       raf: null, alive: true,
     };
     stateRef.current = state;
@@ -288,7 +336,10 @@ export function Arm3D({
       if (!s || !s.alive) return;
       s.raf = requestAnimationFrame(animate);
 
-      for (let i = 0; i < 6; i++) s.current[i] += (s.target[i] - s.current[i]) * 0.08;
+      // Joint interpolation speed. Lower = slower, more deliberate motion so
+      // the user can actually follow the arm. ~0.03 reaches the target in
+      // roughly a second at 60fps; the previous 0.08 was twitchy.
+      for (let i = 0; i < 6; i++) s.current[i] += (s.target[i] - s.current[i]) * 0.03;
       applyJointAngles(s.arm, s.current);
 
       const t = performance.now() / 600;
@@ -300,6 +351,24 @@ export function Arm3D({
         s.playMarker.position.copy(s.tcpWorld);
         s.playMarkerHalo.position.copy(s.tcpWorld);
         s.playMarkerHalo.scale.setScalar(1 + 0.2 * Math.sin(performance.now() / 220));
+      }
+
+      // Wrist-singularity halo: when J5 ≈ 0, joints 4 and 6 align and
+      // velocities become unbounded. Show a pulsing red wireframe sphere
+      // on the TCP while the user has the toggle on.
+      if (s.showSingularity) {
+        const j5 = s.current[4] ?? 0;
+        const nearSing = Math.abs(j5) < 6 * Math.PI / 180;
+        s.wristSingHalo.visible = nearSing;
+        if (nearSing) {
+          s.arm.tcp.getWorldPosition(s.tcpWorld);
+          s.wristSingHalo.position.copy(s.tcpWorld);
+          const pulse = 0.45 + 0.35 * Math.sin(performance.now() / 180);
+          (s.wristSingHalo.material as MeshBasicMaterial).opacity = pulse;
+          s.wristSingHalo.scale.setScalar(1 + 0.18 * Math.sin(performance.now() / 220));
+        }
+      } else if (s.wristSingHalo.visible) {
+        s.wristSingHalo.visible = false;
       }
 
       s.controls.update();
@@ -347,6 +416,22 @@ export function Arm3D({
     const s = stateRef.current; if (!s) return;
     s.controls.autoRotate = !!autoRotate;
   }, [autoRotate]);
+
+  // Recolor scene background + fog when the user switches DARK/MID/LIGHT.
+  useEffect(() => {
+    const s = stateRef.current; if (!s) return;
+    const hex = SCENE_BG_HEX[sceneBg] ?? SCENE_BG_HEX.dark;
+    (s.scene.background as Color)?.setHex(hex);
+    if (s.scene.fog) (s.scene.fog as Fog).color.setHex(hex);
+  }, [sceneBg]);
+
+  // Toggle singularity overlay group + cache the flag the animate loop reads.
+  useEffect(() => {
+    const s = stateRef.current; if (!s) return;
+    s.showSingularity = showSingularity;
+    s.singularityGroup.visible = showSingularity;
+    if (!showSingularity) s.wristSingHalo.visible = false;
+  }, [showSingularity]);
 
   // Swap the end-effector when the `tool` prop changes. We rebuild only the
   // TOOL + TCP groups under j6 (not the whole arm) and re-point state.arm.tcp

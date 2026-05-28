@@ -24,7 +24,13 @@ export function ArmSideView({ width = 320, height = 280, jointAngles, faulty = [
   const color = (i: number) => faulty.includes(i) ? "var(--err)" : "var(--ok)";
 
   return (
-    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: "block" }}>
+    <svg
+      width="100%"
+      height="100%"
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="xMidYMid meet"
+      style={{ display: "block" }}
+    >
       <defs>
         <pattern id="ag1" width="20" height="20" patternUnits="userSpaceOnUse">
           <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(120,180,200,.07)" strokeWidth="1" />
