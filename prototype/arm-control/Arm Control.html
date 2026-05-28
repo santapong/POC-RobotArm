@@ -104,7 +104,7 @@
 
   /* screens */
   .screen { height: 100%; padding: 10px; gap: 10px; overflow: hidden; min-height: 0; }
-  .screen.tasks, .screen.scene-arm, .screen.teleop-arm, .screen.analytics, .screen.settings, .screen.path, .screen.import, .screen.cam { height: auto; overflow: auto; }
+  .screen.tasks, .screen.scene-arm, .screen.teleop-arm, .screen.analytics, .screen.settings, .screen.path, .screen.import, .screen.cam, .screen.program { height: auto; overflow: auto; }
   .screen.empty { display: grid; place-items: center; }
 
   .fleet { display: grid; grid-template-columns: 1fr 360px; grid-template-rows: 1fr auto; gap: 10px; }
@@ -438,6 +438,30 @@
   .recent-row:hover { background: rgba(255,255,255,.02); }
   .queue-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
 
+  /* ───── PROGRAM screen (operation tree hub) ───── */
+  .program { padding: 10px; overflow: auto; height: auto; min-height: calc(100vh - 84px - 32px); }
+  .program-grid {
+    display: grid;
+    grid-template-columns: 300px 1.4fr 320px;
+    grid-template-rows: minmax(420px, 1.5fr) minmax(220px, auto);
+    gap: 10px;
+    min-height: calc(100vh - 84px - 32px);
+  }
+  .program-grid > .panel { min-height: 0; overflow: hidden; }
+  .program-3d { position: relative; width: 100%; height: 100%; background: #02060a; min-height: 420px; }
+  .program-3d > div:first-child { width: 100% !important; height: 100% !important; }
+
+  .op-tree { display: flex; flex-direction: column; padding: 4px 0; overflow: auto; height: 100%; }
+  .op-row { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: center;
+    padding: 6px 10px; border-bottom: 1px solid var(--border); border-left: 2px solid transparent;
+    cursor: pointer; background: transparent; color: var(--fg); font: inherit; text-align: left; }
+  .op-row:hover { background: rgba(255,255,255,.02); }
+  .op-row.sel { background: rgba(74,222,128,.08); border-left-color: var(--ok); }
+  .op-row.disabled { opacity: .45; }
+
+  .post-output { font-family: "JetBrains Mono", monospace; font-size: 10.5px; line-height: 1.55;
+    white-space: pre; overflow: auto; height: 100%; padding: 8px 12px; color: var(--fg-mute); }
+
   /* density */
   .app[data-density="dense"] .dtable td { padding: 3px 8px; }
   .app[data-density="dense"] .panel-body { padding: 8px; }
@@ -614,6 +638,7 @@
 <script type="text/babel" src="arm-screens.jsx"></script>
 <script type="text/babel" src="arm-path.jsx"></script>
 <script type="text/babel" src="arm-cam.jsx"></script>
+<script type="text/babel" src="arm-program.jsx"></script>
 <script type="text/babel" src="arm-import.jsx"></script>
 <script type="text/babel" src="arm-app.jsx"></script>
 </body>

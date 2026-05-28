@@ -7,6 +7,7 @@ const NAV_ARM = [
   { id: "teleop",    label: "TELEOP",    hot: "3", icon: "✦" },
   { id: "cam",       label: "CAM",       hot: "4", icon: "⦿" },
   { id: "path",      label: "PATH",      hot: "5", icon: "↝" },
+  { id: "program",   label: "PROGRAM",   hot: "p", icon: "❖" },
   { id: "import",    label: "IMPORT",    hot: "6", icon: "↓" },
   { id: "tasks",     label: "MISSIONS",  hot: "7", icon: "▶" },
   { id: "scene",     label: "SCENE 3D",  hot: "8", icon: "◈" },
@@ -156,6 +157,7 @@ function App() {
         {screen === "teleop"    && <TeleopScreen robot={selected} onGoto={onGoto} />}
         {screen === "cam"       && <CAMScreen robot={selected} onGoto={onGoto} />}
         {screen === "path"      && <PathScreen robot={selected} />}
+        {screen === "program"   && <ProgramScreen robot={selected} onGoto={onGoto} />}
         {screen === "import"    && <ImportScreen onGoto={onGoto} />}
         {screen === "tasks"     && <TasksScreen fleet={fleet} onSelect={setSelectedId} />}
         {screen === "scene"     && <SceneScreen robot={selected} />}
