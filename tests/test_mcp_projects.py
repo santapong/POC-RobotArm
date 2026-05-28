@@ -138,6 +138,27 @@ def test_mcp_notification_returns_202(client: TestClient) -> None:
     assert r.status_code == 202
 
 
+def test_mcp_unknown_notification_is_silent(client: TestClient) -> None:
+    # JSON-RPC: server MUST NOT reply to a notification, even for unknown
+    # methods. Absence of an `id` field is what makes it a notification.
+    r = client.post("/mcp", json={"jsonrpc": "2.0", "method": "totally/unknown"})
+    assert r.status_code == 202
+
+
+def test_mcp_call_handles_storage_oserror(client: TestClient, tmp_path, monkeypatch) -> None:
+    # Force every save through a write that raises OSError; the tool should
+    # come back as a clean isError, not a 500.
+    def boom(*a, **kw): raise OSError(28, "no space left on device")
+    monkeypatch.setattr("pathlib.Path.write_text", boom)
+    resp = _rpc(client, "tools/call", {
+        "name": "create_project",
+        "arguments": {"name": "boom"},
+    })
+    assert resp["result"]["isError"] is True
+    text = json.loads(resp["result"]["content"][0]["text"])
+    assert "storage error" in text["error"]
+
+
 def test_mcp_list_catalogs_shape(client: TestClient) -> None:
     out = _call_tool(client, "list_catalogs", {})
     assert {t["id"] for t in out["tools"]} >= {"grip-2f", "mig", "spindle"}

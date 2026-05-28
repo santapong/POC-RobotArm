@@ -3,7 +3,7 @@
 // autosave. Includes the NEW / SAVE / LOAD / undo / redo header buttons
 // and the OPEN-IN-PATH hand-off.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Job, OpKind, Operation, Part, Strategy } from "@/types";
 import type { SurfaceHit } from "@/components/three/CAMViewer3D";
 import { PART_LIBRARY, TCP_LIBRARY, TOOL_LIBRARY, findPart, findTool } from "@/lib/catalogs";
@@ -43,7 +43,9 @@ export function ProgramScreen({ robot }: Props) {
   const part: Part | null = op ? findPart(op.partId) : null;
   const tool = op ? findTool(op.toolId) : null;
 
-  useMemo(() => { if (op) setActiveTool(findTool(op.toolId)); return null; }, [op?.toolId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Drive the FK / 3D viewer's active tool from the selected op. useEffect
+  // (not useMemo) because this is a side effect, not a memoized value.
+  useEffect(() => { if (op) setActiveTool(findTool(op.toolId)); }, [op?.toolId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateOp = (id: number, patch: Partial<Operation>, label?: string) =>
     setJob(j => ({ ...j, ops: j.ops.map(o => o.id === id ? { ...o, ...patch } : o) }), label);

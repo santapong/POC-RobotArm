@@ -356,6 +356,10 @@ def _dispatch(method: str, params: Dict[str, Any], req_id: Any) -> Optional[Dict
             return _rpc_result(req_id, {**_content({"error": f"project '{e.args[0]}' not found"}), "isError": True})
         except (ValueError, ProjectInvalid) as e:
             return _rpc_result(req_id, {**_content({"error": str(e)}), "isError": True})
+        except OSError as e:
+            # Disk full, read-only, permission denied — surface as a clean
+            # tool-level error instead of a 500.
+            return _rpc_result(req_id, {**_content({"error": f"storage error: {e}"}), "isError": True})
         return _rpc_result(req_id, _content(payload))
 
     return _rpc_error(req_id, -32601, f"method not found: {method}")
@@ -376,16 +380,22 @@ async def mcp_endpoint(request: Request) -> JSONResponse:
         if not isinstance(msg, dict):
             responses.append(_rpc_error(None, -32600, "invalid request"))
             continue
+        # Per JSON-RPC 2.0: a Notification has no `id`, and the server MUST
+        # NOT reply to it — including on errors. We detect it here and drop
+        # every would-be response for that message.
+        is_notification = "id" not in msg
         method = msg.get("method")
         if not isinstance(method, str):
-            responses.append(_rpc_error(msg.get("id"), -32600, "invalid request"))
+            if not is_notification:
+                responses.append(_rpc_error(msg.get("id"), -32600, "invalid request"))
             continue
         params = msg.get("params") or {}
         if not isinstance(params, dict):
-            responses.append(_rpc_error(msg.get("id"), -32602, "invalid params"))
+            if not is_notification:
+                responses.append(_rpc_error(msg.get("id"), -32602, "invalid params"))
             continue
         resp = _dispatch(method, params, msg.get("id"))
-        if resp is not None:
+        if resp is not None and not is_notification:
             responses.append(resp)
 
     if not responses:
