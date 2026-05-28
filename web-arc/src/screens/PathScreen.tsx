@@ -9,6 +9,8 @@ import { buildPathSamples, buildVelocityProfile, interpolateAtTime } from "@/lib
 import { Arm3D } from "@/components/three/Arm3D";
 import { Panel, Stat } from "@/components/common";
 import { useUiStore } from "@/store/useUiStore";
+import { useDocStore } from "@/store/useDocStore";
+import { resolveRobot } from "@/lib/robots";
 
 export interface PathScreenProps { robot: Robot | undefined; }
 
@@ -31,9 +33,11 @@ const EXAMPLE: Trajectory = {
   ],
 };
 
-export function PathScreen({ robot }: PathScreenProps) {
+export function PathScreen(_props: PathScreenProps) {
   const pending = useUiStore(s => s.pendingTrajectory);
   const traj = pending ?? EXAMPLE;
+  const robotId = useDocStore(s => s.doc.robotId);
+  const activeRobot = resolveRobot(robotId);
 
   const [playT, setPlayT] = useState(0);
   const [playing, setPlaying] = useState(false);
@@ -82,11 +86,13 @@ export function PathScreen({ robot }: PathScreenProps) {
         >
           <div className="path-3d">
             <Arm3D
+              key={activeRobot.id}
               jointAngles={live ? live.joints : traj.waypoints[0].joints}
               pathPoints={pathPoints}
               waypoints={traj.waypoints}
               selectedWaypoint={selWp}
-              reach={robot?.reach ?? 1.0}
+              reach={activeRobot.reach}
+              robot={activeRobot}
               width="100%"
               height="100%"
             />

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Job, OpKind, Operation, Part, Strategy } from "@/types";
 import type { SurfaceHit } from "@/components/three/CAMViewer3D";
 import { PART_LIBRARY, TCP_LIBRARY, TOOL_LIBRARY, findPart, findTool } from "@/lib/catalogs";
+import { ROBOT_LIBRARY, resolveRobot } from "@/lib/robots";
 import { setActiveTool } from "@/lib/three/fk";
 import { approxIK } from "@/lib/cam";
 import { compileJob, genPicks, makeOp, opTrajectory, postProgram } from "@/lib/program";
@@ -42,6 +43,8 @@ export function ProgramScreen({ robot }: Props) {
   const op: Operation | undefined = job.ops.find(o => o.id === selId) ?? job.ops[0];
   const part: Part | null = op ? findPart(op.partId) : null;
   const tool = op ? findTool(op.toolId) : null;
+  const activeRobot = resolveRobot(doc.robotId);
+  const setRobot = (id: string) => apply(d => { d.robotId = id; }, "robot");
 
   // Drive the FK / 3D viewer's active tool from the selected op. useEffect
   // (not useMemo) because this is a side effect, not a memoized value.
@@ -146,11 +149,11 @@ export function ProgramScreen({ robot }: Props) {
           <div className="program-3d">
             {op && part && (
               <CAMViewer3D
-                key={op.id + ":" + op.toolId}
+                key={activeRobot.id + ":" + op.id + ":" + op.toolId}
                 jointAngles={liveJoints}
                 picks={op.params.picks}
                 generatedTrajectory={opTraj}
-                part={part} tool={tool}
+                part={part} tool={tool} robot={activeRobot}
                 onSurfaceClick={handleClick}
                 onSurfaceHover={setHover}
               />
@@ -163,6 +166,23 @@ export function ProgramScreen({ robot }: Props) {
         </Panel>
 
         <Panel title="OPERATION INSPECTOR" style={{ gridColumn: "3", gridRow: "1" }}>
+          {/* Project-level robot selection (saved in Doc.robotId). Above the
+              op-specific fields so it's clearly not per-op. */}
+          <div className="tag dim">PROJECT · ROBOT</div>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", margin: "4px 0 4px" }}>
+            {ROBOT_LIBRARY.map(r => (
+              <button key={r.id}
+                className={"chip" + (activeRobot.id === r.id ? " on" : "")}
+                title={`${r.manufacturer} · ${r.payload}kg · ${(r.reach * 1000).toFixed(0)}mm reach`}
+                onClick={() => setRobot(r.id)}>
+                {r.name}
+              </button>
+            ))}
+          </div>
+          <div className="mono dim" style={{ fontSize: 10, marginBottom: 8 }}>
+            {activeRobot.manufacturer} · {activeRobot.payload}kg · {(activeRobot.reach * 1000).toFixed(0)}mm reach · {activeRobot.dof}-DoF
+          </div>
+          <hr className="hr" />
           {!op ? <div className="mono dim" style={{ padding: 10 }}>No operation selected.</div> : (
             <>
               <div className="form-row">

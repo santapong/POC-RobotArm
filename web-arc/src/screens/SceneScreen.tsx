@@ -4,18 +4,23 @@ import type { Robot } from "@/types";
 import { Panel, Stat } from "@/components/common";
 import { Arm3D } from "@/components/three/Arm3D";
 import { useUiStore } from "@/store/useUiStore";
+import { useDocStore } from "@/store/useDocStore";
+import { resolveRobot } from "@/lib/robots";
 
 interface Props { robot: Robot | undefined; }
 
 export function SceneScreen({ robot }: Props) {
   const autoRotate = useUiStore(s => s.tweaks.autoRotate3D);
   const showWorkspace = useUiStore(s => s.tweaks.showWorkspace);
+  const robotId = useDocStore(s => s.doc.robotId);
+  const activeRobot = resolveRobot(robotId);
   return (
     <div className="screen scene-arm">
-      <Panel title={`SCENE · ${robot?.id ?? "—"}`} pad={false} style={{ gridColumn: "1 / span 2", gridRow: "1 / span 2" }}>
+      <Panel title={`SCENE · ${robot?.id ?? "—"} · ${activeRobot.name}`} pad={false} style={{ gridColumn: "1 / span 2", gridRow: "1 / span 2" }}>
         <div className="scene-3d">
-          <Arm3D jointAngles={[0,-60,90,0,40,0]} width="100%" height="100%"
-            reach={robot?.reach ?? 1.0} autoRotate={autoRotate} showWorkspace={showWorkspace} />
+          <Arm3D key={activeRobot.id} jointAngles={[0,-60,90,0,40,0]} width="100%" height="100%"
+            reach={activeRobot.reach} robot={activeRobot}
+            autoRotate={autoRotate} showWorkspace={showWorkspace} />
         </div>
       </Panel>
       <Panel title="ROBOT" style={{ gridColumn: "3", gridRow: "1" }}>

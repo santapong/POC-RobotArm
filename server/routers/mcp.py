@@ -24,14 +24,17 @@ from pydantic import ValidationError
 
 from server.models.project import Doc
 from server.services.project_store import (
+    DEFAULT_ROBOT_ID,
     OP_DEFAULT_PART,
     OP_DEFAULT_TOOL,
     PART_LIBRARY,
     ProjectInvalid,
     ProjectNotFound,
+    ROBOT_LIBRARY,
     TCP_LIBRARY,
     TOOL_LIBRARY,
     find_part,
+    find_robot,
     find_tool,
     gen_picks,
     get_project_store,
@@ -106,7 +109,12 @@ def _tool_save_project(args: Dict[str, Any]) -> Any:
 
 def _tool_delete_project(args: Dict[str, Any]) -> Any:
     [pid] = _require(args, "projectId")
-    return {"deleted": get_project_store().delete(safe_project_id(pid))}
+    clean = safe_project_id(pid)
+    if not get_project_store().delete(clean):
+        # Match the REST endpoint's 404 semantics — surfaces as an isError
+        # tool result rather than a misleading {deleted:false} success.
+        raise ProjectNotFound(clean)
+    return {"deleted": clean}
 
 
 def _tool_create_project(args: Dict[str, Any]) -> Any:
@@ -125,8 +133,27 @@ def _tool_list_catalogs(_: Dict[str, Any]) -> Any:
         "tools": [t.model_dump(by_alias=True, exclude_none=True) for t in TOOL_LIBRARY],
         "parts": [p.model_dump(by_alias=True, exclude_none=True) for p in PART_LIBRARY],
         "tcps":  [t.model_dump(by_alias=True, exclude_none=True) for t in TCP_LIBRARY],
+        "robots": [r.model_dump(by_alias=True, exclude_none=True) for r in ROBOT_LIBRARY],
+        "defaultRobotId": DEFAULT_ROBOT_ID,
         "opKinds": list(OP_DEFAULT_TOOL.keys()),
     }
+
+
+def _tool_list_robots(_: Dict[str, Any]) -> Any:
+    return {
+        "robots": [r.model_dump(by_alias=True, exclude_none=True) for r in ROBOT_LIBRARY],
+        "defaultRobotId": DEFAULT_ROBOT_ID,
+    }
+
+
+def _tool_set_robot(args: Dict[str, Any]) -> Any:
+    [pid, robot_id] = _require(args, "projectId", "robotId")
+    if not find_robot(robot_id):
+        known = ", ".join(r.id for r in ROBOT_LIBRARY)
+        raise ValueError(f"unknown robotId '{robot_id}' — known: {known}")
+    def m(doc: Doc) -> None:
+        doc.robot_id = robot_id
+    return _mutate(pid, m)
 
 
 # ---- operation editing --------------------------------------------------- #
@@ -232,70 +259,88 @@ def _tool_add_pick(args: Dict[str, Any]) -> Any:
 
 # ---- registry ------------------------------------------------------------ #
 
-_PROJECT_ID_S = {"type": "string", "description": "Project id (slug or name)."}
-_OP_ID_S = {"type": "integer", "description": "Operation id (1-based)."}
-_VEC3_S = {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+# Schema fragment factories — each call returns a FRESH dict so a tool's
+# input_schema is never aliased to another tool's. (Sharing by reference is
+# safe today but a one-line mutation later would silently leak across tools.)
+def _project_id_s() -> Dict[str, Any]:
+    return {"type": "string", "description": "Project id (slug or name)."}
+
+
+def _op_id_s() -> Dict[str, Any]:
+    return {"type": "integer", "description": "Operation id (1-based)."}
+
+
+def _vec3_s() -> Dict[str, Any]:
+    return {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+
 
 TOOLS: List[Tool] = [
     Tool("list_projects", "List every saved project (id + meta + op count).",
          {"type": "object", "properties": {}, "additionalProperties": False},
          _tool_list_projects),
     Tool("load_project", "Load a project by id and return its Doc JSON.",
-         {"type": "object", "required": ["projectId"], "properties": {"projectId": _PROJECT_ID_S}},
+         {"type": "object", "required": ["projectId"], "properties": {"projectId": _project_id_s()}},
          _tool_load_project),
     Tool("save_project", "Save (create or overwrite) a project from a Doc JSON.",
-         {"type": "object", "required": ["projectId", "doc"], "properties": {"projectId": _PROJECT_ID_S, "doc": {"type": "object"}}},
+         {"type": "object", "required": ["projectId", "doc"], "properties": {"projectId": _project_id_s(), "doc": {"type": "object"}}},
          _tool_save_project),
     Tool("delete_project", "Delete a project by id.",
-         {"type": "object", "required": ["projectId"], "properties": {"projectId": _PROJECT_ID_S}},
+         {"type": "object", "required": ["projectId"], "properties": {"projectId": _project_id_s()}},
          _tool_delete_project),
     Tool("create_project", "Create a new project from the default template.",
-         {"type": "object", "properties": {"projectId": _PROJECT_ID_S, "name": {"type": "string"}}},
+         {"type": "object", "properties": {"projectId": _project_id_s(), "name": {"type": "string"}}},
          _tool_create_project),
 
-    Tool("list_catalogs", "List the tool / part / TCP catalogs and op kinds the editor knows about.",
+    Tool("list_catalogs", "List the tool / part / TCP / robot catalogs and op kinds the editor knows about.",
          {"type": "object", "properties": {}, "additionalProperties": False},
          _tool_list_catalogs),
+    Tool("list_robots", "List every RobotModel the editor supports (payload, reach, joint limits, max speeds).",
+         {"type": "object", "properties": {}, "additionalProperties": False},
+         _tool_list_robots),
+    Tool("set_robot", "Set the RobotModel a project is authored for. robotId must be a known catalog id (see list_robots).",
+         {"type": "object", "required": ["projectId", "robotId"],
+          "properties": {"projectId": _project_id_s(), "robotId": {"type": "string"}}},
+         _tool_set_robot),
 
     Tool("create_op", "Append a new operation to a project. kind ∈ PICKPLACE|WELD|MILL|DISPENSE.",
          {"type": "object", "required": ["projectId", "kind"],
-          "properties": {"projectId": _PROJECT_ID_S, "kind": {"type": "string", "enum": list(OP_DEFAULT_TOOL.keys())}, "name": {"type": "string"}}},
+          "properties": {"projectId": _project_id_s(), "kind": {"type": "string", "enum": list(OP_DEFAULT_TOOL.keys())}, "name": {"type": "string"}}},
          _tool_create_op),
     Tool("delete_op", "Remove an operation from a project.",
          {"type": "object", "required": ["projectId", "opId"],
-          "properties": {"projectId": _PROJECT_ID_S, "opId": _OP_ID_S}},
+          "properties": {"projectId": _project_id_s(), "opId": _op_id_s()}},
          _tool_delete_op),
     Tool("set_tool", "Set an op's end-effector (toolId ∈ catalogs).",
          {"type": "object", "required": ["projectId", "opId", "toolId"],
-          "properties": {"projectId": _PROJECT_ID_S, "opId": _OP_ID_S, "toolId": {"type": "string"}}},
+          "properties": {"projectId": _project_id_s(), "opId": _op_id_s(), "toolId": {"type": "string"}}},
          _tool_set_tool),
     Tool("set_part", "Set an op's part (regenerates picks for the current strategy).",
          {"type": "object", "required": ["projectId", "opId", "partId"],
-          "properties": {"projectId": _PROJECT_ID_S, "opId": _OP_ID_S, "partId": {"type": "string"}}},
+          "properties": {"projectId": _project_id_s(), "opId": _op_id_s(), "partId": {"type": "string"}}},
          _tool_set_part),
     Tool("set_tcp", "Set an op's TCP frame.",
          {"type": "object", "required": ["projectId", "opId", "tcpId"],
-          "properties": {"projectId": _PROJECT_ID_S, "opId": _OP_ID_S, "tcpId": {"type": "string"}}},
+          "properties": {"projectId": _project_id_s(), "opId": _op_id_s(), "tcpId": {"type": "string"}}},
          _tool_set_tcp),
     Tool("set_strategy", "Set an op's strategy ∈ POINTS|CONTOUR|RASTER|SEAM (regenerates picks).",
          {"type": "object", "required": ["projectId", "opId", "strategy"],
-          "properties": {"projectId": _PROJECT_ID_S, "opId": _OP_ID_S, "strategy": {"type": "string", "enum": ["POINTS", "CONTOUR", "RASTER", "SEAM"]}}},
+          "properties": {"projectId": _project_id_s(), "opId": _op_id_s(), "strategy": {"type": "string", "enum": ["POINTS", "CONTOUR", "RASTER", "SEAM"]}}},
          _tool_set_strategy),
     Tool("set_weave", "Set an op's weld weave. type ∈ NONE|SINE|ZIGZAG|TRIANGLE|TRAPEZOID.",
          {"type": "object", "required": ["projectId", "opId", "type"],
-          "properties": {"projectId": _PROJECT_ID_S, "opId": _OP_ID_S,
+          "properties": {"projectId": _project_id_s(), "opId": _op_id_s(),
                          "type": {"type": "string", "enum": ["NONE", "SINE", "ZIGZAG", "TRIANGLE", "TRAPEZOID"]},
                          "amplitude": {"type": "number"}, "wavelength": {"type": "number"}, "edgeDwell": {"type": "number"}}},
          _tool_set_weave),
     Tool("set_op_param", "Set an op param: key ∈ vel|acc|standoff|approach|enabled|name.",
          {"type": "object", "required": ["projectId", "opId", "key", "value"],
-          "properties": {"projectId": _PROJECT_ID_S, "opId": _OP_ID_S,
+          "properties": {"projectId": _project_id_s(), "opId": _op_id_s(),
                          "key": {"type": "string", "enum": ["vel", "acc", "standoff", "approach", "enabled", "name"]},
                          "value": {}}},
          _tool_set_op_param),
     Tool("add_pick", "Append a pick (point + normal) to an op's pick polyline.",
          {"type": "object", "required": ["projectId", "opId", "point", "normal"],
-          "properties": {"projectId": _PROJECT_ID_S, "opId": _OP_ID_S, "point": _VEC3_S, "normal": _VEC3_S}},
+          "properties": {"projectId": _project_id_s(), "opId": _op_id_s(), "point": _vec3_s(), "normal": _vec3_s()}},
          _tool_add_pick),
 ]
 

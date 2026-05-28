@@ -145,6 +145,31 @@ def test_mcp_unknown_notification_is_silent(client: TestClient) -> None:
     assert r.status_code == 202
 
 
+def test_mcp_delete_unknown_project_is_error(client: TestClient) -> None:
+    # Match REST 404 semantics: deleting a non-existent project surfaces as a
+    # tool-level isError, not a misleading {deleted:false} success.
+    resp = _rpc(client, "tools/call", {
+        "name": "delete_project",
+        "arguments": {"projectId": "no-such-project"},
+    })
+    assert resp["result"]["isError"] is True
+    text = json.loads(resp["result"]["content"][0]["text"])
+    assert "not found" in text["error"]
+
+
+def test_mutate_skips_save_on_noop(client: TestClient) -> None:
+    # Setting the tool to its current value mustn't bump meta.modified.
+    out = _call_tool(client, "create_project", {"name": "noop", "projectId": "noop"})
+    op_id = out["doc"]["job"]["ops"][0]["id"]
+    current_tool = out["doc"]["job"]["ops"][0]["toolId"]
+    modified_before = ps.get_project_store().load("noop").meta.modified
+
+    # Call set_tool with the same toolId → mutate should detect no change and skip save.
+    _call_tool(client, "set_tool", {"projectId": "noop", "opId": op_id, "toolId": current_tool})
+    modified_after = ps.get_project_store().load("noop").meta.modified
+    assert modified_after == modified_before, "meta.modified must not bump on no-op edit"
+
+
 def test_mcp_call_handles_storage_oserror(client: TestClient, tmp_path, monkeypatch) -> None:
     # Force every save through a write that raises OSError; the tool should
     # come back as a clean isError, not a 500.
@@ -164,4 +189,57 @@ def test_mcp_list_catalogs_shape(client: TestClient) -> None:
     assert {t["id"] for t in out["tools"]} >= {"grip-2f", "mig", "spindle"}
     assert {p["id"] for p in out["parts"]} >= {"part-box", "part-cyl", "part-plate", "part-step"}
     assert {t["id"] for t in out["tcps"]} >= {"tcp-flange", "tcp-tip", "tcp-weld"}
+    assert {r["id"] for r in out["robots"]} >= {"ur5e", "abb-irb1300-10-115", "fanuc-lrmate-200id-7l"}
+    assert out["defaultRobotId"] == "ur5e"
     assert set(out["opKinds"]) == {"PICKPLACE", "WELD", "MILL", "DISPENSE"}
+
+
+def test_mcp_list_robots_shape(client: TestClient) -> None:
+    out = _call_tool(client, "list_robots", {})
+    assert out["defaultRobotId"] == "ur5e"
+    ids = {r["id"] for r in out["robots"]}
+    # at least the ABB IRB 1300 family + UR baseline are present
+    assert ids >= {"ur5e", "abb-irb1300-7-140", "abb-irb1300-10-115", "abb-irb1300-11-090"}
+    # each entry has the spec fields the editor consumes
+    for r in out["robots"]:
+        assert isinstance(r["payload"], (int, float))
+        assert isinstance(r["reach"], (int, float))
+        assert r["dof"] == 6
+        assert len(r["jointLimits"]) == 6
+        assert len(r["maxJointVel"]) == 6
+        # link lengths must include the five named fields
+        assert {"baseHeight", "upperArm", "forearm", "wristOffset", "flangeOffset"} <= set(r["links"].keys())
+
+
+def test_mcp_set_robot_updates_doc_and_rejects_unknown(client: TestClient) -> None:
+    _call_tool(client, "create_project", {"name": "rbtest", "projectId": "rbtest"})
+
+    # set to a valid robot
+    out = _call_tool(client, "set_robot", {"projectId": "rbtest", "robotId": "abb-irb1300-10-115"})
+    assert out["robotId"] == "abb-irb1300-10-115"
+
+    # unknown robot rejected with a clean isError
+    resp = _rpc(client, "tools/call", {
+        "name": "set_robot",
+        "arguments": {"projectId": "rbtest", "robotId": "totally-fake-arm"},
+    })
+    assert resp["result"]["isError"] is True
+    text = json.loads(resp["result"]["content"][0]["text"])
+    assert "unknown robotId" in text["error"]
+
+
+def test_doc_roundtrip_preserves_robot_id(client: TestClient) -> None:
+    # v2 doc with robotId round-trips through PUT/GET.
+    _call_tool(client, "create_project", {"name": "rt", "projectId": "rt"})
+    _call_tool(client, "set_robot", {"projectId": "rt", "robotId": "abb-irb120"})
+
+    r = client.get("/api/projects/rt")
+    assert r.status_code == 200
+    doc = r.json()
+    assert doc["robotId"] == "abb-irb120"
+    assert doc["version"] == 2
+
+    # PUT it straight back unchanged
+    r = client.put("/api/projects/rt", json=doc)
+    assert r.status_code == 200
+    assert r.json()["robotId"] == "abb-irb120"

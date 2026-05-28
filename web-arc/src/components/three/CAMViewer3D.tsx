@@ -11,9 +11,9 @@ import {
   Quaternion, Raycaster, RingGeometry, Scene, SphereGeometry, Vector2, Vector3,
   WebGLRenderer, ArrowHelper, type Object3D,
 } from "three";
-import type { Part, Pick, Tool, Trajectory } from "@/types";
+import type { Part, Pick, RobotModel, Tool, Trajectory } from "@/types";
 import { applyJointAngles, buildArmMesh, type ArmMesh } from "@/lib/three/arm-mesh";
-import { armTCP, setActiveTool } from "@/lib/three/fk";
+import { armTCP, setActiveRobot, setActiveTool } from "@/lib/three/fk";
 import { buildPartMesh } from "@/lib/three/part-mesh";
 import { buildPathSamples } from "@/lib/trajectory";
 import { OrbitControls } from "@/lib/three/orbit-controls";
@@ -26,6 +26,10 @@ export interface CAMViewer3DProps {
   generatedTrajectory: Trajectory | null;
   part: Part | null;
   tool: Tool | null;
+  // Optional active robot. Drives the arm's link lengths and the IK used by
+  // generateCAMTrajectory. Combine with React `key={robotId+":"+toolId}` to
+  // force a fresh build on either change.
+  robot?: RobotModel | null;
   onSurfaceClick?: (hit: SurfaceHit) => void;
   onSurfaceHover?: (hit: SurfaceHit | null) => void;
 }
@@ -44,7 +48,7 @@ interface ViewerState {
 
 export function CAMViewer3D({
   jointAngles, picks, generatedTrajectory,
-  part, tool,
+  part, tool, robot = null,
   onSurfaceClick, onSurfaceHover,
 }: CAMViewer3DProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -54,9 +58,10 @@ export function CAMViewer3D({
     const mount = mountRef.current;
     if (!mount) return;
 
-    // Make this viewer's tool the active one BEFORE building the arm/path,
-    // so the FK cache (armTCP) is rebuilt against the new tool's TCP length
-    // (and the green path/waypoints sit on the tool).
+    // Make this viewer's tool + robot the active ones BEFORE building the
+    // arm/path, so the FK cache (armTCP) is rebuilt against the new link
+    // lengths and TCP length (the green path/waypoints sit on the tool).
+    setActiveRobot(robot ?? null);
     setActiveTool(tool ?? null);
 
     const W = mount.clientWidth || 800;
@@ -88,7 +93,7 @@ export function CAMViewer3D({
     );
     floor.rotation.x = -Math.PI / 2; floor.position.y = -0.001; scene.add(floor);
 
-    const arm = buildArmMesh(tool ?? null);
+    const arm = buildArmMesh(tool ?? null, robot ?? null);
     scene.add(arm.root);
 
     let workpiece = buildPartMesh(part);

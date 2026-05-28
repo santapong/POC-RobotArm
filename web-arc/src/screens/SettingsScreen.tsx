@@ -3,10 +3,14 @@
 import type { Robot } from "@/types";
 import { Panel, Stat } from "@/components/common";
 import { JOINTS6 } from "@/lib/fleet";
+import { useDocStore } from "@/store/useDocStore";
+import { resolveRobot } from "@/lib/robots";
 
 interface Props { robot: Robot | undefined; }
 
 export function SettingsScreen({ robot }: Props) {
+  const robotId = useDocStore(s => s.doc.robotId);
+  const model = resolveRobot(robotId);
   return (
     <div className="screen settings">
       <div className="settings-grid">
@@ -15,6 +19,29 @@ export function SettingsScreen({ robot }: Props) {
           <div className="form-row"><span className="tag dim">HOSTNAME</span><input className="inp" defaultValue={(robot?.id ?? "").toLowerCase()} /></div>
           <div className="form-row"><span className="tag dim">CELL</span><input className="inp" defaultValue={robot?.zone ?? ""} /></div>
           <Stat label="FIRMWARE" value={robot?.fw ?? "—"} />
+        </Panel>
+
+        <Panel title={`ROBOT · ${model.manufacturer} ${model.name}`}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            <Stat label="PAYLOAD" value={`${model.payload} kg`} color="var(--ok)" />
+            <Stat label="REACH" value={`${(model.reach * 1000).toFixed(0)} mm`} />
+            <Stat label="DoF" value={model.dof} />
+            <Stat label="MAX TCP" value={`${model.maxTcpSpeed.toFixed(2)} m/s`} />
+          </div>
+          <hr className="hr" />
+          <div className="tag dim">JOINT LIMITS · °</div>
+          {model.jointLimits.map(([lo, hi], i) => (
+            <div key={i} className="form-row" style={{ flexDirection: "row", gap: 8 }}>
+              <span className="mono" style={{ width: 30, fontSize: 10, color: "var(--ok)" }}>J{i + 1}</span>
+              <span className="mono dim" style={{ fontSize: 10 }}>{lo} … {hi}</span>
+              <span className="mono dim" style={{ fontSize: 10, marginLeft: "auto" }}>{model.maxJointVel[i]}°/s</span>
+            </div>
+          ))}
+          <hr className="hr" />
+          <div className="tag dim">LINK LENGTHS · m (schematic)</div>
+          <div className="mono dim" style={{ fontSize: 10 }}>
+            base {model.links.baseHeight.toFixed(3)} · upper {model.links.upperArm.toFixed(3)} · fore {model.links.forearm.toFixed(3)} · wrist {model.links.wristOffset.toFixed(3)} · flange {model.links.flangeOffset.toFixed(3)}
+          </div>
         </Panel>
 
         <Panel title="CONTROL · PID PER JOINT">

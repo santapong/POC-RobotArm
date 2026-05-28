@@ -5,7 +5,11 @@
 import type { Doc, Job } from "@/types";
 import { DEFAULT_JOB } from "./program";
 
-export const DOC_VERSION = 1;
+// v1: { version, meta, job, activeTcpId }
+// v2: + optional `robotId` (RobotModel selection). Missing → default.
+export const DOC_VERSION = 2;
+// localStorage key kept stable across the v1→v2 migration; the in-memory
+// shape is upgraded on read by deserializeDoc().
 export const DOC_LS_KEY = "arc_ops_project_v1";
 
 export function makeDefaultDoc(): Doc {
@@ -15,14 +19,19 @@ export function makeDefaultDoc(): Doc {
     meta: { name: base.name || "Untitled Program", author: base.author || "OP·KOSTA", modified: new Date().toISOString() },
     job: base,
     activeTcpId: base.activeTcpId || "tcp-tip",
+    // Leave robotId unset; resolveRobot() falls back to DEFAULT_ROBOT_ID.
   };
 }
 
 export function serializeDoc(doc: Doc): string {
-  return JSON.stringify(
-    { version: DOC_VERSION, meta: doc.meta, job: doc.job, activeTcpId: doc.activeTcpId },
-    null, 2,
-  );
+  const payload: Record<string, unknown> = {
+    version: DOC_VERSION,
+    meta: doc.meta,
+    job: doc.job,
+    activeTcpId: doc.activeTcpId,
+  };
+  if (doc.robotId) payload.robotId = doc.robotId;
+  return JSON.stringify(payload, null, 2);
 }
 
 export function deserializeDoc(input: string | unknown): Doc {
@@ -32,11 +41,13 @@ export function deserializeDoc(input: string | unknown): Doc {
   if (!j || !Array.isArray(j.ops)) throw new Error("Not a valid ARC·OPS project (missing job.ops)");
   const m = (o as { meta?: Doc["meta"] }).meta;
   const tcp = (o as { activeTcpId?: string }).activeTcpId;
+  const robotId = (o as { robotId?: string }).robotId;   // v1 docs leave this unset
   return {
     version: DOC_VERSION,
     meta: m ?? { name: "Imported Program", author: "OP", modified: new Date().toISOString() },
     job: j,
     activeTcpId: tcp ?? j.activeTcpId ?? "tcp-tip",
+    ...(robotId ? { robotId } : {}),
   };
 }
 
