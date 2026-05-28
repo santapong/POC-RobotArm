@@ -474,6 +474,29 @@
   ::-webkit-scrollbar-thumb { background: rgba(140,180,200,.15); }
   ::-webkit-scrollbar-thumb:hover { background: rgba(140,180,200,.3); }
 
+  /* disabled chip (undo/redo when stack empty) */
+  .chip.disabled { opacity: .4; pointer-events: none; }
+
+  /* command console overlay */
+  .console { position: fixed; left: 0; right: 0; bottom: 0; height: 280px; z-index: 1200;
+    background: rgba(8,12,18,.96); border-top: 1px solid var(--ok);
+    display: flex; flex-direction: column; backdrop-filter: blur(6px);
+    box-shadow: 0 -8px 28px rgba(0,0,0,.55); }
+  .console-hd { display: flex; align-items: center; gap: 10px; padding: 5px 10px;
+    border-bottom: 1px solid var(--border); background: var(--bg-1); }
+  .console-log { flex: 1; overflow: auto; padding: 6px 12px;
+    font-family: "JetBrains Mono", monospace; font-size: 11px; line-height: 1.5; }
+  .console-line { white-space: pre-wrap; color: var(--fg-mute); }
+  .console-line.cmd  { color: var(--fg); }
+  .console-line.ok   { color: var(--ok); }
+  .console-line.err  { color: var(--err); }
+  .console-line.info { color: var(--info); }
+  .console-line.dim  { color: var(--dim); }
+  .console-prompt { display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+    border-top: 1px solid var(--border); background: var(--bg-2); }
+  .console-input { flex: 1; background: transparent; border: 0; color: var(--fg);
+    outline: none; font-size: 12px; }
+
   /* film grain scanlines */
   body::after {
     content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1000;
@@ -640,6 +663,9 @@
 <script type="text/babel" src="arm-cam.jsx"></script>
 <script type="text/babel" src="arm-program.jsx"></script>
 <script type="text/babel" src="arm-import.jsx"></script>
+<!-- Project document store (save/load + undo/redo) + command console -->
+<script type="text/babel" src="arm-doc.jsx"></script>
+<script type="text/babel" src="arm-console.jsx"></script>
 <script type="text/babel" src="arm-app.jsx"></script>
 </body>
 </html>

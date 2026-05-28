@@ -105,8 +105,31 @@ const DEFAULT_JOB = {
   ],
 };
 
+// Build a fresh operation of `kind`. Shared by the inspector's ＋ buttons and
+// the command console's `add`, so there's one definition of op defaults.
+function makeOp(id, kind) {
+  return {
+    id, name: `${kind} ${id}`, enabled: true, kind,
+    partId: OP_DEFAULT_PART[kind], toolId: OP_DEFAULT_TOOL[kind], tcpId: "tcp-tip",
+    strategy: kind === "WELD" ? "SEAM" : "POINTS",
+    params: {
+      standoff: 5, approach: 60, vel: 30, acc: 40,
+      weave: kind === "WELD" ? { type: "SINE", amplitude: 0.004, wavelength: 0.012, edgeDwell: 0.05 } : { ...WEAVE_DEFAULT },
+      picks: genPicks(kind === "WELD" ? "SEAM" : "POINTS", findPart(OP_DEFAULT_PART[kind])),
+    },
+  };
+}
+
 function ProgramScreen({ robot, onGoto }) {
-  const [job, setJob] = React.useState(() => JSON.parse(JSON.stringify(DEFAULT_JOB)));
+  // The job lives in the shared document store (undo/redo + save/load operate on
+  // it). `setJob(updater, label)` keeps every existing call site working while
+  // routing edits through history; `label` lets rapid edits (slider drags)
+  // coalesce into a single undo step.
+  const doc = useDoc();
+  const job = doc.job;
+  const setJob = (updater, label) => DocStore.apply(d => {
+    d.job = typeof updater === "function" ? updater(d.job) : updater;
+  }, label);
   const [selId, setSelId] = React.useState(1);
   const [hover, setHover] = React.useState(null);
 
@@ -117,21 +140,13 @@ function ProgramScreen({ robot, onGoto }) {
   // make the selected op's tool active so 3D/FK/IK all use it
   React.useEffect(() => { if (op) setActiveTool(findTool(op.toolId)); }, [op && op.toolId]);
 
-  const updateOp = (id, patch) => setJob(j => ({ ...j, ops: j.ops.map(o => o.id === id ? { ...o, ...patch } : o) }));
-  const updateParams = (id, patch) => setJob(j => ({ ...j, ops: j.ops.map(o => o.id === id ? { ...o, params: { ...o.params, ...patch } } : o) }));
-  const setWeave = (patch) => updateParams(selId, { weave: { ...op.params.weave, ...patch } });
+  const updateOp = (id, patch, label) => setJob(j => ({ ...j, ops: j.ops.map(o => o.id === id ? { ...o, ...patch } : o) }), label);
+  const updateParams = (id, patch, label) => setJob(j => ({ ...j, ops: j.ops.map(o => o.id === id ? { ...o, params: { ...o.params, ...patch } } : o) }), label);
+  const setWeave = (patch, label) => updateParams(selId, { weave: { ...op.params.weave, ...patch } }, label);
 
   const addOp = (kind) => {
     const nid = Math.max(0, ...job.ops.map(o => o.id)) + 1;
-    const newOp = {
-      id: nid, name: `${kind} ${nid}`, enabled: true, kind,
-      partId: OP_DEFAULT_PART[kind], toolId: OP_DEFAULT_TOOL[kind], tcpId: "tcp-tip",
-      strategy: kind === "WELD" ? "SEAM" : "POINTS",
-      params: { standoff: 5, approach: 60, vel: 30, acc: 40,
-        weave: kind === "WELD" ? { type: "SINE", amplitude: 0.004, wavelength: 0.012, edgeDwell: 0.05 } : { ...WEAVE_DEFAULT },
-        picks: genPicks(kind === "WELD" ? "SEAM" : "POINTS", findPart(OP_DEFAULT_PART[kind])) },
-    };
-    setJob(j => ({ ...j, ops: [...j.ops, newOp] }));
+    setJob(j => ({ ...j, ops: [...j.ops, makeOp(nid, kind)] }));
     setSelId(nid);
   };
   const delOp = (id) => {
@@ -149,7 +164,7 @@ function ProgramScreen({ robot, onGoto }) {
     const ops = j.ops.slice();[ops[i], ops[ni]] = [ops[ni], ops[i]];
     return { ...j, ops };
   });
-  const regenPicks = (strategy) => { updateOp(selId, { strategy }); updateParams(selId, { picks: genPicks(strategy, part) }); };
+  const regenPicks = (strategy) => setJob(j => ({ ...j, ops: j.ops.map(o => o.id === selId ? { ...o, strategy, params: { ...o.params, picks: genPicks(strategy, findPart(o.partId)) } } : o) }));
 
   const handleClick = (hit) => updateParams(selId, { picks: [...(op.params.picks || []), hit] });
 
@@ -169,7 +184,14 @@ function ProgramScreen({ robot, onGoto }) {
       <div className="program-grid">
         {/* OPERATION TREE */}
         <Panel title={`▸ JOB · ${job.name}`} right={
-          <span className="mono" style={{ fontSize: 10, color: "var(--ok)" }}>{job.ops.filter(o => o.enabled).length}/{job.ops.length} ON</span>
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <span className="mono" style={{ fontSize: 10, color: "var(--ok)", marginRight: 2 }}>{job.ops.filter(o => o.enabled).length}/{job.ops.length} ON</span>
+            <span className="chip" title="New program" onClick={() => DocStore.replace(makeDefaultDoc(), "new")}>NEW</span>
+            <span className="chip" title="Save project (⌘S)" onClick={() => downloadDoc(DocStore.getSnapshot())}>SAVE</span>
+            <span className="chip" title="Load project" onClick={() => openDocFile().then(d => DocStore.replace(d, "load")).catch(() => {})}>LOAD</span>
+            <span className={"chip" + (DocStore.canUndo() ? "" : " disabled")} title="Undo (⌘Z)" onClick={() => DocStore.undo()}>↶</span>
+            <span className={"chip" + (DocStore.canRedo() ? "" : " disabled")} title="Redo (⌘⇧Z)" onClick={() => DocStore.redo()}>↷</span>
+          </div>
         } pad={false} style={{ gridColumn: "1", gridRow: "1" }}>
           <div className="op-tree">
             {job.ops.map((o, i) => (
@@ -245,7 +267,7 @@ function ProgramScreen({ robot, onGoto }) {
               <div style={{ display: "flex", gap: 4, flexWrap: "wrap", margin: "4px 0 8px" }}>
                 {PART_LIBRARY.map(p =>
                   <button key={p.id} className={"chip" + (op.partId === p.id ? " on" : "")}
-                          onClick={() => { updateOp(op.id, { partId: p.id }); updateParams(op.id, { picks: genPicks(op.strategy, findPart(p.id)) }); }}>{p.name}</button>
+                          onClick={() => setJob(j => ({ ...j, ops: j.ops.map(o => o.id === op.id ? { ...o, partId: p.id, params: { ...o.params, picks: genPicks(o.strategy, findPart(p.id)) } } : o) }))}>{p.name}</button>
                 )}
               </div>
               <div className="form-row" style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
@@ -268,7 +290,7 @@ function ProgramScreen({ robot, onGoto }) {
                 <div key={k} className="cam-slider">
                   <div className="cam-slider-h"><span className="tag dim">{lbl}</span>
                     <span className="mono" style={{ color: "var(--ok)" }}>{op.params[k]} {u}</span></div>
-                  <input type="range" className="slider" min={mn} max={mx} value={op.params[k]} onChange={e => updateParams(op.id, { [k]: +e.target.value })} />
+                  <input type="range" className="slider" min={mn} max={mx} value={op.params[k]} onChange={e => updateParams(op.id, { [k]: +e.target.value }, "p:" + k + ":" + op.id)} />
                 </div>
               ))}
 
@@ -287,13 +309,13 @@ function ProgramScreen({ robot, onGoto }) {
                         <div className="cam-slider-h"><span className="tag dim">AMPLITUDE</span>
                           <span className="mono" style={{ color: "var(--ok)" }}>{(op.params.weave.amplitude * 1000).toFixed(0)} mm</span></div>
                         <input type="range" className="slider" min="0.001" max="0.02" step="0.001"
-                          value={op.params.weave.amplitude} onChange={e => setWeave({ amplitude: +e.target.value })} />
+                          value={op.params.weave.amplitude} onChange={e => setWeave({ amplitude: +e.target.value }, "weave:amp:" + op.id)} />
                       </div>
                       <div className="cam-slider">
                         <div className="cam-slider-h"><span className="tag dim">WAVELENGTH</span>
                           <span className="mono" style={{ color: "var(--ok)" }}>{(op.params.weave.wavelength * 1000).toFixed(0)} mm</span></div>
                         <input type="range" className="slider" min="0.004" max="0.04" step="0.001"
-                          value={op.params.weave.wavelength} onChange={e => setWeave({ wavelength: +e.target.value })} />
+                          value={op.params.weave.wavelength} onChange={e => setWeave({ wavelength: +e.target.value }, "weave:wl:" + op.id)} />
                       </div>
                     </>
                   )}
@@ -345,4 +367,4 @@ function ProgramScreen({ robot, onGoto }) {
   );
 }
 
-Object.assign(window, { ProgramScreen, compileJob, opTrajectory, postProgram, genPicks });
+Object.assign(window, { ProgramScreen, compileJob, opTrajectory, postProgram, genPicks, makeOp, DEFAULT_JOB });

@@ -303,10 +303,10 @@ function ImportScreen({ onGoto }) {
         <Panel title={sel && (sel.type === "PROG" || sel.type === "PY") ? `EDITOR · ${sel.path.split("/").pop()}` : "EDITOR"} right={
           <div style={{ display: "flex", gap: 4 }}>
             <span className="tag dim">UTF-8 · LF</span>
-            <button className="chip">UNDO</button>
-            <button className="chip">REDO</button>
+            <button className="chip" onClick={() => DocStore.undo()}>UNDO</button>
+            <button className="chip" onClick={() => DocStore.redo()}>REDO</button>
             <button className="chip">FORMAT</button>
-            <button className="chip on">SAVE · ⌘S</button>
+            <button className="chip on" onClick={() => downloadDoc(DocStore.getSnapshot())}>SAVE · ⌘S</button>
           </div>
         } pad={false} style={{ gridColumn: "1 / span 3" }}>
           <div className="editor-wrap">

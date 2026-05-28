@@ -115,6 +115,7 @@ function App() {
   const [screen, setScreen] = React.useState("fleet");
   const [selectedId, setSelectedId] = React.useState("ARM-003");
   const [alerts] = React.useState(ALERTS_INIT);
+  const [showConsole, setShowConsole] = React.useState(false);
 
   React.useEffect(() => { setFleet(buildFleet(t.armCount)); }, [t.armCount]);
 
@@ -141,6 +142,23 @@ function App() {
     };
     window.addEventListener("keydown", dn);
     return () => window.removeEventListener("keydown", dn);
+  }, []);
+
+  // global shortcuts: ` toggles the command console, ⌘/Ctrl+S saves the project,
+  // ⌘/Ctrl+Z undo, ⌘/Ctrl+(Shift)Z or Ctrl+Y redo. Undo/redo defer to native
+  // text editing while typing in a field.
+  React.useEffect(() => {
+    const onKey = e => {
+      const tag = e.target && e.target.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || (e.target && e.target.isContentEditable);
+      if (e.key === "`" && !typing) { e.preventDefault(); setShowConsole(v => !v); return; }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) { e.preventDefault(); downloadDoc(DocStore.getSnapshot()); return; }
+      if (typing) return;
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === "z" || e.key === "Z")) { e.preventDefault(); DocStore.undo(); }
+      else if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y" || ((e.key === "z" || e.key === "Z") && e.shiftKey))) { e.preventDefault(); DocStore.redo(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   const selected = fleet.find(r => r.id === selectedId);
@@ -184,6 +202,8 @@ function App() {
         <TweakSlider label="Arm count" value={t.armCount} min={6} max={60} unit=""
           onChange={v => setTweak("armCount", v)} />
       </TweaksPanel>
+
+      <CommandConsole open={showConsole} onClose={() => setShowConsole(false)} onGoto={setScreen} />
     </div>
   );
 }
