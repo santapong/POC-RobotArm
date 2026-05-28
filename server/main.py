@@ -140,8 +140,10 @@ def create_app() -> FastAPI:
     from server.routers.assets import router as assets_router
     from server.routers.health import router as health_router
     from server.routers.io import router as io_router
+    from server.routers.mcp import router as mcp_router
     from server.routers.planning import router as planning_router
     from server.routers.programs import router as programs_router
+    from server.routers.projects import router as projects_router
     from server.routers.robots import router as robots_router
     from server.routers.station import router as station_router
     from server.routers.vision import router as vision_router
@@ -154,11 +156,13 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(assets_router)
     app.include_router(programs_router)
+    app.include_router(projects_router)
     app.include_router(robots_router)
     app.include_router(station_router)
     app.include_router(vision_router)
     app.include_router(planning_router)
     app.include_router(io_router)
+    app.include_router(mcp_router)
     app.include_router(events_router)
     app.include_router(telemetry_router)
     app.include_router(vision_ws_router)
