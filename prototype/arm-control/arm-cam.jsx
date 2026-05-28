@@ -65,8 +65,11 @@ function generateCAMTrajectory(picks, opts = {}) {
     home = [0, 0.9, 0],
     moveType = "MoveL",
     tool = null,
+    weave = null,
   } = opts;
   const tcpLen = tool && tool.tcpOffset ? Math.hypot(tool.tcpOffset[0], tool.tcpOffset[1], tool.tcpOffset[2]) : null;
+  // weld weave: densify the pick polyline into an oscillating path
+  const wpicks = (weave && weave.type !== "NONE" && window.applyWeave) ? window.applyWeave(picks, weave) : picks;
 
   const wps = [];
   let t = 0;
@@ -82,7 +85,7 @@ function generateCAMTrajectory(picks, opts = {}) {
   t += 0.6;
 
   // 2) APPROACH first point — offset along normal by approachHeight
-  const first = picks[0];
+  const first = wpicks[0];
   const firstAprPos = [
     first.point[0] + first.normal[0] * approachHeight,
     first.point[1] + first.normal[1] * approachHeight,
@@ -98,15 +101,17 @@ function generateCAMTrajectory(picks, opts = {}) {
   });
   t += 0.7;
 
-  // 3) For each pick: descend to standoff, then move to next at standoff
-  picks.forEach((p, i) => {
+  // 3) For each pick: descend to standoff, then move to next at standoff.
+  // Weave produces many dense points, so shorten the per-point time then.
+  const dense = wpicks.length > 12;
+  wpicks.forEach((p, i) => {
     const tcp = [
       p.point[0] + p.normal[0] * standoff,
       p.point[1] + p.normal[1] * standoff,
       p.point[2] + p.normal[2] * standoff,
     ];
     const isFirst = i === 0;
-    const dur = isFirst ? 0.4 : 0.6;
+    const dur = isFirst ? 0.4 : (dense ? 0.12 : 0.6);
     wps.push({
       id: wps.length + 1,
       name: `PT-${String(i + 1).padStart(2, "0")}`,
@@ -115,8 +120,8 @@ function generateCAMTrajectory(picks, opts = {}) {
       rot: rotFromNormal(p.normal),
       joints: approxIK(tcp, p.normal, tcpLen),
       vel, acc,
-      blend: i === picks.length - 1 ? 0 : 5,
-      dwell: isFirst ? 0.1 : 0,
+      blend: i === wpicks.length - 1 ? 0 : 5,
+      dwell: isFirst ? 0.1 : (p.dwell || 0),
       io: isFirst ? { type: "DO", ch: 0, value: true,  label: "TOOL ON" } : null,
       t: t + dur,
     });
@@ -124,7 +129,7 @@ function generateCAMTrajectory(picks, opts = {}) {
   });
 
   // 4) RETREAT — lift off from last point
-  const last = picks[picks.length - 1];
+  const last = wpicks[wpicks.length - 1];
   const retreatPos = [
     last.point[0] + last.normal[0] * approachHeight,
     last.point[1] + last.normal[1] * approachHeight,
@@ -486,9 +491,14 @@ function CAMScreen({ robot, onGoto }) {
   const [vel, setVel] = React.useState(30);
   const [acc, setAcc] = React.useState(40);
   const [orient, setOrient] = React.useState("NORMAL");    // NORMAL | FIXED_Z | TANGENT
+  const [weaveType, setWeaveType] = React.useState("NONE"); // NONE|ZIGZAG|SINE|TRIANGLE|TRAPEZOID
+  const [weaveAmp, setWeaveAmp] = React.useState(4);        // mm
+  const [weaveWl, setWeaveWl] = React.useState(12);         // mm
+  const [weaveDwell, setWeaveDwell] = React.useState(0.05); // s
 
   const [picks, setPicks] = React.useState([]);
   const [hover, setHover] = React.useState(null);
+  const weave = { type: weaveType, amplitude: weaveAmp / 1000, wavelength: weaveWl / 1000, edgeDwell: weaveDwell };
 
   const tool = findTool(toolId);
   // make the chosen tool active so the 3D arm, FK and IK all use it
@@ -548,9 +558,9 @@ function CAMScreen({ robot, onGoto }) {
     return generateCAMTrajectory(picks, {
       standoff:  standoff / 1000,
       approachHeight: approach / 1000,
-      vel, acc, tool,
+      vel, acc, tool, weave,
     });
-  }, [picks, standoff, approach, vel, acc, toolId]);
+  }, [picks, standoff, approach, vel, acc, toolId, weaveType, weaveAmp, weaveWl, weaveDwell]);
 
   // joint angles: at last picked point if any, else home
   const liveJoints = React.useMemo(() => {
@@ -707,10 +717,42 @@ function CAMScreen({ robot, onGoto }) {
           </div>
 
           <hr className="hr" />
+          <div className="tag dim">WELD WEAVE</div>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4, marginBottom: 4 }}>
+            {["NONE","ZIGZAG","SINE","TRIANGLE","TRAPEZOID"].map(w =>
+              <button key={w} className={"chip" + (weaveType === w ? " on" : "")} onClick={() => setWeaveType(w)}>{w}</button>
+            )}
+          </div>
+          {weaveType !== "NONE" && (
+            <>
+              <div className="cam-slider">
+                <div className="cam-slider-h"><span className="tag dim">AMPLITUDE</span>
+                  <span className="mono" style={{ color: "var(--ok)" }}>{weaveAmp} mm</span></div>
+                <input type="range" className="slider" min="1" max="20" value={weaveAmp} onChange={e => setWeaveAmp(+e.target.value)} />
+              </div>
+              <div className="cam-slider">
+                <div className="cam-slider-h"><span className="tag dim">WAVELENGTH</span>
+                  <span className="mono" style={{ color: "var(--ok)" }}>{weaveWl} mm</span></div>
+                <input type="range" className="slider" min="4" max="40" value={weaveWl} onChange={e => setWeaveWl(+e.target.value)} />
+              </div>
+              <div className="cam-slider">
+                <div className="cam-slider-h"><span className="tag dim">EDGE DWELL</span>
+                  <span className="mono" style={{ color: "var(--ok)" }}>{weaveDwell.toFixed(2)} s</span></div>
+                <input type="range" className="slider" min="0" max="0.5" step="0.01" value={weaveDwell} onChange={e => setWeaveDwell(+e.target.value)} />
+              </div>
+            </>
+          )}
+
+          <hr className="hr" />
           <div className="tag dim">QUICK GENERATE</div>
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
             <button className="btn" onClick={generateContour}>▢ CONTOUR</button>
             <button className="btn" onClick={generateRaster}>≡ RASTER</button>
+            <button className="btn" onClick={() => {
+              const { x0, x1, z } = (() => { const f = footprint(); return { x0: f.x0, x1: f.x1, z: (f.z0 + f.z1) / 2 }; })();
+              const y = footprint().y, n = [0, 1, 0];
+              setPicks([{ point: [x0, y, z], normal: n }, { point: [x1, y, z], normal: n }]);
+            }}>― SEAM</button>
           </div>
         </Panel>
 
