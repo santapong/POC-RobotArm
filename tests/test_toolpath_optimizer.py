@@ -114,3 +114,89 @@ def test_optimize_joints_high_manip_filter() -> None:
             phi_step_deg=30.0,
             manipulability_min=10.0,  # impossibly high
         )
+
+
+# ---------------------------------------------------------------------------
+# Regressions for the two cost/candidate defects
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_rows_are_index_aligned() -> None:
+    """Candidate k must mean the same IK branch at every waypoint.
+
+    The DP compares candidate k at waypoint i against candidate j at i-1, so
+    those edge weights are only meaningful if an index tracks one branch along
+    the path. Seeding every phi from one shared configuration let ik_LM land
+    in an unrelated branch per phi and per waypoint: on this very path,
+    same-index candidates were a mean of 1.5 rad and up to 8.3 rad apart for a
+    20 mm pose step.
+    """
+    from src.toolpath.optimizer import _ik_candidates
+
+    ur5 = get_ur5()
+    phis = np.linspace(0.0, 2.0 * math.pi, 12, endpoint=False)
+    waypoints = _line_path(3)
+
+    prev_row = None
+    seed = np.zeros(ur5.n)
+    rows = []
+    for wp in waypoints:
+        row = _ik_candidates(ur5, wp, phis, 1e-6, seed, prev_row=prev_row)
+        assert len(row) == len(phis), "rows must have one entry per phi"
+        rows.append(row)
+        prev_row = row
+        seed = next(c[0] for c in row if c is not None)
+
+    for i in range(1, len(rows)):
+        for k, (a, b) in enumerate(zip(rows[i - 1], rows[i])):
+            if a is None or b is None:
+                continue
+            step = float(np.linalg.norm(b[0] - a[0]))
+            assert step < 0.5, (
+                f"candidate {k} jumped {step:.3f} rad between waypoints "
+                f"20 mm apart — the index is not tracking one IK branch"
+            )
+
+
+def test_manip_penalty_is_bounded_and_scale_free() -> None:
+    """The penalty is referenced to the trellis median, not 1/m."""
+    from src.toolpath.optimizer import _manip_penalty
+
+    ref = 0.05
+    # At or above the reference a candidate is not penalised at all.
+    assert _manip_penalty(ref, ref, weight=1.0, cap=10.0) == 0.0
+    assert _manip_penalty(ref * 2, ref, weight=1.0, cap=10.0) == 0.0
+    # Below it the charge grows but stays bounded by the cap...
+    mid = _manip_penalty(ref / 3, ref, weight=1.0, cap=10.0)
+    assert 0.0 < mid <= 10.0
+    # ...even as manipulability collapses toward a singularity, where an
+    # unbounded 1/m would have reached four orders of magnitude.
+    assert _manip_penalty(1e-9, ref, weight=1.0, cap=10.0) == 10.0
+    # Zero weight disables it.
+    assert _manip_penalty(1e-9, ref, weight=0.0, cap=10.0) == 0.0
+
+
+def test_smoothness_not_swamped_by_manipulability_term() -> None:
+    """Default weights must not cost much more travel than pure smoothness.
+
+    manipulability is not dimensionless, so adding weight/m straight to ||dq||
+    compared two quantities with no common scale. On a UR5 at a comfortable
+    pose 1/m is about 13 while a step is about 0.13 rad, so the DP optimised
+    manipulability alone and smoothness was noise in the sum.
+    """
+    ur5 = get_ur5()
+    waypoints = _line_path(6)
+    kw = dict(phi_step_deg=30.0, manipulability_min=1e-6)
+
+    default = np.asarray(optimize_joints(ur5, waypoints, **kw))
+    smooth = np.asarray(optimize_joints(ur5, waypoints, manip_weight=0.0, **kw))
+
+    def travel(qs):
+        return float(np.linalg.norm(np.diff(qs, axis=0), axis=1).sum())
+
+    # The manipulability term may legitimately trade a little smoothness away,
+    # but it must not dominate. Measured on this path: before the fix the
+    # default cost 0.70 rad against 0.37 for pure smoothness (ratio 1.90);
+    # after, both are 0.37 (ratio 1.00), because a median-or-better candidate
+    # is charged nothing at all.
+    assert travel(default) <= travel(smooth) * 1.5
