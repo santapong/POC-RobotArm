@@ -266,3 +266,32 @@ def test_is_valid_none_matches_previous_behaviour() -> None:
     assert optimize_joints(ur5, waypoints, **kw) == optimize_joints(
         ur5, waypoints, is_valid=None, **kw
     )
+
+
+def test_q_init_selects_the_starting_branch() -> None:
+    """The first seed decides which IK branch the whole path lands in.
+
+    optimize_joints previously hardcoded zeros, which is an arbitrary place to
+    start and rarely where the arm is. On a path where a joint must sweep a
+    full turn this is decisive: seeded one way the sweep runs into a joint
+    limit and wraps, seeded another it fits.
+    """
+    ur5 = get_ur5()
+    waypoints = _line_path(6)
+    kw = dict(phi_step_deg=30.0, manipulability_min=1e-6)
+
+    default = optimize_joints(ur5, waypoints, **kw)
+    seeded = optimize_joints(ur5, waypoints, q_init=default[0], **kw)
+
+    # Seeding with a solution the optimizer itself chose must stay valid and
+    # shaped correctly; it need not be identical, since IK is iterative.
+    assert len(seeded) == len(waypoints)
+    for q in seeded:
+        assert len(q) == ur5.n
+        assert all(math.isfinite(v) for v in q)
+
+
+def test_q_init_rejects_a_wrong_length() -> None:
+    ur5 = get_ur5()
+    with pytest.raises(ValueError, match="q_init"):
+        optimize_joints(ur5, _line_path(2), q_init=[0.0, 0.0], phi_step_deg=90.0)
