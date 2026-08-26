@@ -200,3 +200,69 @@ def test_smoothness_not_swamped_by_manipulability_term() -> None:
     # after, both are 0.37 (ratio 1.00), because a median-or-better candidate
     # is charged nothing at all.
     assert travel(default) <= travel(smooth) * 1.5
+
+
+# ---------------------------------------------------------------------------
+# is_valid: the caller's window onto the world the arm stands in
+# ---------------------------------------------------------------------------
+
+
+def test_is_valid_rejects_candidates_from_the_trellis() -> None:
+    """A rejected configuration must never appear in the result.
+
+    Without this hook the optimizer screens on joint limits and manipulability
+    only, which says nothing about obstacles: on a real machining cell its path
+    put the forearm through the benchtop for 20% of the waypoints.
+    """
+    ur5 = get_ur5()
+    waypoints = _line_path(5)
+    kw = dict(phi_step_deg=30.0, manipulability_min=1e-6)
+
+    baseline = optimize_joints(ur5, waypoints, **kw)
+    # Forbid the exact shoulder band the unconstrained solution uses.
+    banned_lo = min(q[1] for q in baseline) - 0.05
+    banned_hi = max(q[1] for q in baseline) + 0.05
+
+    def is_valid(q):
+        return not (banned_lo <= q[1] <= banned_hi)
+
+    try:
+        qs = optimize_joints(ur5, waypoints, is_valid=is_valid, **kw)
+    except ValueError as exc:
+        # Legitimate outcome: nothing outside the banned band is reachable.
+        assert "zero feasible candidates" in str(exc)
+        assert "is_valid" in str(exc), "the error should name the culprit"
+        return
+
+    for q in qs:
+        assert not (banned_lo <= q[1] <= banned_hi), (
+            "a configuration rejected by is_valid came back in the result"
+        )
+
+
+def test_is_valid_is_called_for_every_candidate() -> None:
+    """The predicate sees each (waypoint, phi) candidate, not just the winners."""
+    ur5 = get_ur5()
+    waypoints = _line_path(3)
+    seen: list[int] = []
+
+    def is_valid(q):
+        seen.append(len(q))
+        return True
+
+    qs = optimize_joints(ur5, waypoints, is_valid=is_valid,
+                         phi_step_deg=90.0, manipulability_min=1e-6)
+    assert len(qs) == len(waypoints)
+    # 3 waypoints x 4 phis, minus any that failed IK or the limit check.
+    assert 0 < len(seen) <= 12
+    assert all(n == ur5.n for n in seen)
+
+
+def test_is_valid_none_matches_previous_behaviour() -> None:
+    """Omitting the hook changes nothing."""
+    ur5 = get_ur5()
+    waypoints = _line_path(4)
+    kw = dict(phi_step_deg=30.0, manipulability_min=1e-6)
+    assert optimize_joints(ur5, waypoints, **kw) == optimize_joints(
+        ur5, waypoints, is_valid=None, **kw
+    )

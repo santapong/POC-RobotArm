@@ -20,7 +20,7 @@ rest of the toolpath package.
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import numpy as np
 
@@ -70,6 +70,7 @@ def _ik_candidates(
     manipulability_min: float,
     q_seed: np.ndarray | None,
     prev_row: list[tuple[np.ndarray, float] | None] | None = None,
+    is_valid: Callable[[np.ndarray], bool] | None = None,
 ) -> list[tuple[np.ndarray, float] | None]:
     """Return ``(q, manipulability)`` per phi for one waypoint, index-aligned.
 
@@ -91,6 +92,14 @@ def _ik_candidates(
     UR5, consecutive waypoints 20 mm apart produced same-index candidates a
     mean of 1.5 rad and as much as 8.3 rad apart, which makes every trellis
     edge weight fiction.
+
+    ``is_valid`` is an optional predicate applied to each accepted solution.
+    Without it this function screens only on joint limits and manipulability,
+    which says nothing about the world the arm is standing in: on a real cell
+    the resulting path drove the forearm through the benchtop for 20% of its
+    waypoints. A caller with a planning scene passes a checker here so
+    colliding configurations never enter the trellis at all, rather than being
+    discovered after the DP has already committed to them.
     """
     qlim = np.asarray(getattr(robot, "qlim", np.empty((2, 0))), dtype=float)
     fallback = np.zeros(robot.n) if q_seed is None else np.asarray(q_seed, dtype=float)
@@ -118,6 +127,9 @@ def _ik_candidates(
             continue
         m = _manipulability(robot, q)
         if m < manipulability_min:
+            out.append(None)
+            continue
+        if is_valid is not None and not is_valid(q):
             out.append(None)
             continue
 
@@ -163,6 +175,7 @@ def optimize_joints(
     travel_weight: float = 1.0,
     manip_weight: float = 1.0,
     manip_penalty_cap: float = 10.0,
+    is_valid: Callable[[np.ndarray], bool] | None = None,
 ) -> list[tuple[float, ...]]:
     """Run the DP trellis to pick joint configurations along ``waypoints``.
 
@@ -184,6 +197,13 @@ def optimize_joints(
             travel on any robot. Pass 0 for pure smoothness.
         manip_penalty_cap: Ceiling on that penalty, in the same units. Stops a
             single near-singular candidate from dominating the whole path.
+        is_valid: Optional predicate ``q -> bool`` applied to every candidate.
+            This optimizer otherwise knows nothing about the world around the
+            arm — it screens on joint limits and manipulability only — so a
+            caller holding a planning scene should pass a collision check here.
+            Candidates that fail never enter the trellis. Note it is called
+            once per (waypoint, phi), so a slow check is felt: a 365-waypoint
+            path with a 30-degree fan is roughly 4400 calls.
 
     Returns:
         A list of joint-configuration tuples, one per input waypoint.
@@ -219,10 +239,12 @@ def optimize_joints(
             manipulability_min=manipulability_min,
             q_seed=seed,
             prev_row=prev_row,
+            is_valid=is_valid,
         )
         if not any(c is not None for c in row):
+            hint = " (is_valid rejected every candidate?)" if is_valid else ""
             raise ValueError(
-                f"optimize_joints: waypoint {i} has zero feasible candidates"
+                f"optimize_joints: waypoint {i} has zero feasible candidates{hint}"
             )
         rows.append(row)
         prev_row = row
