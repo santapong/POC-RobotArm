@@ -176,6 +176,7 @@ def optimize_joints(
     manip_weight: float = 1.0,
     manip_penalty_cap: float = 10.0,
     is_valid: Callable[[np.ndarray], bool] | None = None,
+    q_init: Sequence[float] | None = None,
 ) -> list[tuple[float, ...]]:
     """Run the DP trellis to pick joint configurations along ``waypoints``.
 
@@ -204,6 +205,20 @@ def optimize_joints(
             Candidates that fail never enter the trellis. Note it is called
             once per (waypoint, phi), so a slow check is felt: a 365-waypoint
             path with a 30-degree fan is roughly 4400 calls.
+        q_init: Configuration to seed the first waypoint's IK from. Defaults to
+            all zeros, which is an arbitrary place to start and is rarely where
+            the arm actually is; pass the robot's current joints instead.
+
+            This is not a detail. The first seed decides which IK branch the
+            whole path lands in, and on a closed path it decides whether a
+            joint that must sweep a full turn has the room. Measured on a ring
+            toolpath needing 2*pi of wrist roll, on a joint whose limits span
+            6.62 rad: seeded from zeros the sweep began too high, ran into the
+            limit at 3.27 of a needed 3.39, and wrapped -- 13.59 rad of travel
+            with a 6.16 rad discontinuity. Seeded so the sweep was centred, the
+            same path used 7.56 rad with a worst step of 0.13, joint 4 running
+            -3.14..+3.14 entirely inside its limits. Same waypoints, same
+            solver; only the starting branch differed.
 
     Returns:
         A list of joint-configuration tuples, one per input waypoint.
@@ -229,7 +244,13 @@ def optimize_joints(
     # phi has no acceptable solution) so that candidate k means the same branch
     # at every waypoint; see _ik_candidates.
     rows: list[list[tuple[np.ndarray, float] | None]] = []
-    seed = np.zeros(robot.n)
+    seed = (np.zeros(robot.n) if q_init is None
+            else np.asarray(q_init, dtype=float))
+    if seed.shape != (robot.n,):
+        raise ValueError(
+            f"optimize_joints: q_init must have {robot.n} values, "
+            f"got {seed.shape}"
+        )
     prev_row: list[tuple[np.ndarray, float] | None] | None = None
     for i, wp in enumerate(waypoints):
         row = _ik_candidates(
